@@ -298,6 +298,51 @@ def hydrate_virtual_trades() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# CI verification — turn silent push failures into loud red workflow runs
+# ---------------------------------------------------------------------------
+
+def verify_recent_screen(max_age_hours: int = 6) -> bool:
+    """
+    True if Supabase has a screens row recorded within max_age_hours.
+    Used as a post-run CI gate: pushes are individually non-fatal (a DB blip
+    shouldn't kill a screen), but a run that wrote NOTHING to the cloud must
+    fail loudly instead of showing a lying green checkmark.
+
+    Returns True when Supabase isn't configured (nothing to verify).
+    """
+    client = _get_client()
+    if client is None:
+        return True
+    try:
+        res = (
+            client.table("screens")
+            .select("screen_id,recorded_at")
+            .order("recorded_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        if not rows:
+            logger.error("verify_recent_screen: screens table is EMPTY")
+            return False
+        ts = datetime.fromisoformat(
+            str(rows[0]["recorded_at"]).replace("Z", "+00:00")
+        )
+        from datetime import timedelta, timezone
+        age = datetime.now(timezone.utc) - ts
+        ok = age < timedelta(hours=max_age_hours)
+        if not ok:
+            logger.error(
+                f"verify_recent_screen: newest screen is {age} old "
+                f"(> {max_age_hours}h) — this run's push did not land"
+            )
+        return ok
+    except Exception as e:
+        logger.error(f"verify_recent_screen failed: {e}")
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Backfill helper — push everything from local JSONL into Supabase
 # ---------------------------------------------------------------------------
 

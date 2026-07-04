@@ -41,6 +41,22 @@ jobs:
       - name: Run weekly screener
         run: python -m csp_screener.main --no-ibkr
 
+      - name: Verify data landed in Supabase
+        run: |
+          python -c "
+          import sys
+          from csp_screener import supabase_sync
+          if not supabase_sync.is_enabled():
+              print('WARNING: Supabase not configured — running local-only.')
+              print('Set SUPABASE_URL and SUPABASE_SERVICE_KEY repo secrets.')
+              sys.exit(1)
+          if not supabase_sync.verify_recent_screen():
+              print('FAIL: screener ran but NOTHING landed in Supabase.')
+              print('Check SUPABASE_URL (no /rest/v1 suffix!) and SUPABASE_SERVICE_KEY.')
+              sys.exit(1)
+          print('OK: Supabase has a fresh screens row.')
+          "
+
       - name: Upload journal artifacts
         if: always()
         uses: actions/upload-artifact@v4
