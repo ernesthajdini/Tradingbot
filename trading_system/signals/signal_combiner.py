@@ -43,11 +43,50 @@ class SignalCombiner:
     def __init__(self, rule_weight: float = 0.5, ml_weight: float = 0.5):
         self.rule_weight = rule_weight
         self.ml_weight = ml_weight
+        self.min_confidence = 0.15  # can be overridden by adaptive learner
         self.sentiment_data: dict[str, dict] = {}  # ticker -> sentiment result
+        self.earnings_dates: dict[str, list] = {}  # ticker -> list of upcoming earnings dates
+        # Filter thresholds
+        self.max_overnight_gap = 0.03  # reject if today's open gapped >3% from prev close
+        self.earnings_blackout_days = 5  # reject signals within N days of earnings
 
     def set_sentiment_data(self, sentiment_data: dict[str, dict]):
         """Inject sentiment data from scrapers."""
         self.sentiment_data = sentiment_data
+
+    def set_earnings_dates(self, earnings_dates: dict[str, list]):
+        """Inject upcoming earnings dates per ticker."""
+        self.earnings_dates = earnings_dates
+
+    def _is_near_earnings(self, ticker: str, current_date) -> bool:
+        """Check if we're within earnings_blackout_days of an earnings date."""
+        from datetime import timedelta
+        dates = self.earnings_dates.get(ticker, [])
+        if not dates:
+            return False
+        try:
+            cur = pd.Timestamp(current_date).normalize()
+            for d in dates:
+                ed = pd.Timestamp(d).normalize()
+                if abs((ed - cur).days) <= self.earnings_blackout_days:
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def _has_excessive_gap(self, features_df: pd.DataFrame) -> bool:
+        """Check if today's open gapped >max_overnight_gap from yesterday's close."""
+        if len(features_df) < 2:
+            return False
+        try:
+            today_open = float(features_df["Open"].iloc[-1])
+            yesterday_close = float(features_df["Close"].iloc[-2])
+            if yesterday_close <= 0:
+                return False
+            gap = abs(today_open / yesterday_close - 1)
+            return gap > self.max_overnight_gap
+        except Exception:
+            return False
 
     def combine(
         self,
@@ -66,6 +105,14 @@ class SignalCombiner:
         latest_idx = features_df.index[-1]
         price = features_df.loc[latest_idx, "Adj Close"] if "Adj Close" in features_df.columns else features_df.loc[latest_idx, "Close"]
         atr = features_df.loc[latest_idx, "atr"] if "atr" in features_df.columns else price * 0.02
+
+        # FILTER 1: Earnings blackout — biggest source of unexpected losses (gaps)
+        if self._is_near_earnings(ticker, latest_idx):
+            return None
+
+        # FILTER 2: Pre-market gap — something newsy happened, increased tail risk
+        if self._has_excessive_gap(features_df):
+            return None
 
         # Rule-based score
         rule_score = rule_signals.loc[latest_idx, "rule_score"] if latest_idx in rule_signals.index else 0.0
@@ -123,7 +170,7 @@ class SignalCombiner:
             direction = "HOLD"
 
         # Skip low-confidence signals
-        if combined_conf < 0.15 or direction == "HOLD":
+        if combined_conf < self.min_confidence or direction == "HOLD":
             return None
 
         # Calculate stop loss and target based on ATR

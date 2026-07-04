@@ -52,6 +52,45 @@ class TradingSystem:
             except Exception as e:
                 logger.warning(f"Could not load ML model: {e}")
 
+    def _fetch_earnings_dates(self, tickers: list[str]) -> dict[str, list]:
+        """
+        Fetch upcoming earnings dates for tickers via yfinance (best-effort).
+        Returns ticker -> list of pd.Timestamp dates.
+        Cached for the trading day to avoid repeated calls.
+        """
+        import yfinance as yf
+        from datetime import datetime, timedelta
+        # Simple in-memory cache keyed by date
+        if not hasattr(self, '_earnings_cache'):
+            self._earnings_cache = {}
+        today = datetime.now().date()
+        if self._earnings_cache.get('date') == today:
+            return self._earnings_cache.get('data', {})
+
+        out = {}
+        for t in tickers:
+            try:
+                ticker_obj = yf.Ticker(t)
+                cal = ticker_obj.calendar
+                if cal is not None:
+                    # yfinance returns calendar as dict or DataFrame depending on version
+                    if isinstance(cal, dict):
+                        ed = cal.get("Earnings Date")
+                        if ed:
+                            out[t] = [ed] if not isinstance(ed, list) else ed
+                    elif hasattr(cal, "T"):
+                        try:
+                            ed = cal.T.iloc[0].get("Earnings Date")
+                            if pd.notna(ed):
+                                out[t] = [ed]
+                        except Exception:
+                            pass
+            except Exception:
+                continue
+
+        self._earnings_cache = {'date': today, 'data': out}
+        return out
+
     def scan(self, tickers: list[str] | None = None, use_ml: bool = False) -> list[TradingSignal]:
         """
         Run a full scan: fetch data, compute features, generate signals.
@@ -66,6 +105,30 @@ class TradingSystem:
             logger.error("No price data loaded")
             return []
 
+        # 1b. Fetch benchmark (SPY) and macro (VIX) for cross-sectional/macro features
+        benchmark_df = None
+        vix_df = None
+        current_vix = None
+        try:
+            macro_data = self.pipeline.fetch_prices(["SPY", "^VIX"])
+            benchmark_df = macro_data.get("SPY")
+            vix_df = macro_data.get("^VIX")
+            if vix_df is not None and not vix_df.empty:
+                current_vix = float(vix_df["Close"].iloc[-1])
+                # Inject VIX into risk manager for volatility-scaled sizing
+                self.risk_manager.set_vix(current_vix)
+                logger.info(f"Current VIX: {current_vix:.2f} (sizing factor: {self.risk_manager._vol_scale_factor():.2f}x)")
+        except Exception as e:
+            logger.debug(f"Macro data fetch failed: {e}")
+
+        # 1c. Fetch earnings dates for blackout filter (best-effort, batched)
+        try:
+            earnings = self._fetch_earnings_dates(tickers[:30])  # cap to avoid slow yfinance calls
+            if earnings:
+                self.combiner.set_earnings_dates(earnings)
+        except Exception as e:
+            logger.debug(f"Earnings fetch failed: {e}")
+
         # 2. Compute features
         features_dict = {}
         rule_signals_dict = {}
@@ -73,7 +136,7 @@ class TradingSystem:
 
         for ticker, df in price_data.items():
             try:
-                feat_df = self.features.compute_all(df)
+                feat_df = self.features.compute_all(df, benchmark_df=benchmark_df, vix_df=vix_df)
                 features_dict[ticker] = feat_df
 
                 # 3. Rule-based signals
@@ -194,11 +257,22 @@ class TradingSystem:
 
         # Fetch and prepare data
         price_data = self.pipeline.fetch_prices(tickers)
+
+        # Fetch benchmark + macro for cross-sectional features during training
+        benchmark_df = None
+        vix_df = None
+        try:
+            macro_data = self.pipeline.fetch_prices(["SPY", "^VIX"])
+            benchmark_df = macro_data.get("SPY")
+            vix_df = macro_data.get("^VIX")
+        except Exception as e:
+            logger.debug(f"Macro data fetch failed: {e}")
+
         features_dict = {}
 
         for ticker, df in price_data.items():
             try:
-                feat_df = self.features.compute_all(df)
+                feat_df = self.features.compute_all(df, benchmark_df=benchmark_df, vix_df=vix_df)
                 target = self.ml_model.prepare_target(feat_df)
                 feat_df["target"] = target
                 features_dict[ticker] = feat_df
@@ -249,12 +323,22 @@ class TradingSystem:
         price_data = self.pipeline.fetch_prices(tickers)
         benchmark = self.pipeline.fetch_benchmark()
 
+        # Fetch macro data for cross-sectional/macro features
+        benchmark_df = None
+        vix_df = None
+        try:
+            macro_data = self.pipeline.fetch_prices(["SPY", "^VIX"])
+            benchmark_df = macro_data.get("SPY")
+            vix_df = macro_data.get("^VIX")
+        except Exception as e:
+            logger.debug(f"Macro fetch failed: {e}")
+
         # Generate signals for all historical dates
         signals_by_date: dict[str, list] = {}
 
         for ticker, df in price_data.items():
             try:
-                feat_df = self.features.compute_all(df)
+                feat_df = self.features.compute_all(df, benchmark_df=benchmark_df, vix_df=vix_df)
                 rule_sigs = self.rule_signals.generate(feat_df)
 
                 # Warmup period: skip first 200 days

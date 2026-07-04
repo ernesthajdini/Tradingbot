@@ -1,0 +1,45 @@
+#!/bin/sh
+# Pre-commit hook: enforce the 14-day cooldown on csp_screener/config.py.
+#
+# The single most reliable way to destroy a working screener is tweaking
+# thresholds every week based on noise. This hook rejects commits that touch
+# config.py if the last commit touching it was less than 14 days ago.
+#
+# Deliberate override (use sparingly, you are probably overfitting):
+#   COOLDOWN_OVERRIDE=1 git commit -m "..."
+
+CONFIG_FILE="csp_screener/config.py"
+COOLDOWN_DAYS=14
+
+# Only enforce when config.py is actually staged
+if ! git diff --cached --name-only | grep -q "^${CONFIG_FILE}$"; then
+    exit 0
+fi
+
+if [ "$COOLDOWN_OVERRIDE" = "1" ]; then
+    echo "[cooldown] OVERRIDE used for ${CONFIG_FILE} — logging your sin and allowing commit."
+    exit 0
+fi
+
+LAST_COMMIT_TS=$(git log -1 --format=%ct -- "${CONFIG_FILE}" 2>/dev/null)
+if [ -z "$LAST_COMMIT_TS" ]; then
+    # Never committed before — allow
+    exit 0
+fi
+
+NOW_TS=$(date +%s)
+AGE_DAYS=$(( (NOW_TS - LAST_COMMIT_TS) / 86400 ))
+
+if [ "$AGE_DAYS" -lt "$COOLDOWN_DAYS" ]; then
+    echo ""
+    echo "  COMMIT REJECTED: ${CONFIG_FILE} was last changed ${AGE_DAYS} day(s) ago."
+    echo "  The cooldown is ${COOLDOWN_DAYS} days. This rule exists because tweaking"
+    echo "  thresholds on small-sample noise is how screeners get destroyed."
+    echo ""
+    echo "  If you have 60+ closed virtual trades and a data-backed hypothesis:"
+    echo "    COOLDOWN_OVERRIDE=1 git commit ..."
+    echo ""
+    exit 1
+fi
+
+exit 0

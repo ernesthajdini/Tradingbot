@@ -20,7 +20,11 @@ logger = logging.getLogger(__name__)
 class MLSignalModel:
     """XGBoost-based signal model with walk-forward training."""
 
-    LABELS = {0: "DOWN", 1: "FLAT", 2: "UP"}
+    # Triple-barrier labels:
+    # 0 = SL hit first (loss)
+    # 1 = timed out (no clear winner — flat)
+    # 2 = TP hit first (win)
+    LABELS = {0: "SL_HIT", 1: "TIMEOUT", 2: "TP_HIT"}
 
     def __init__(self, config: MLConfig | None = None):
         self.config = config or MLConfig()
@@ -31,18 +35,63 @@ class MLSignalModel:
 
     def prepare_target(self, df: pd.DataFrame, price_col: str = "Adj Close") -> pd.Series:
         """
-        Create classification target based on forward returns.
-        0 = DOWN (return < -threshold)
-        1 = FLAT (|return| <= threshold)
-        2 = UP   (return > threshold)
-        """
-        fwd_return = df[price_col].pct_change(self.config.target_horizon).shift(-self.config.target_horizon)
-        threshold = self.config.classification_threshold
+        Triple-barrier labeling: simulate a trade entered at each bar with
+        TP at +3*ATR and SL at -2*ATR (matching our actual strategy).
+        Label = which barrier hit first within the next `target_horizon * 2` bars.
 
-        target = pd.Series(1, index=df.index, name="target")  # default FLAT
-        target[fwd_return > threshold] = 2   # UP
-        target[fwd_return < -threshold] = 0  # DOWN
-        target[fwd_return.isna()] = np.nan
+        This is far more aligned with how trades actually exit than predicting
+        "5-day forward return", because that ignores path-dependence.
+        """
+        price = df[price_col]
+        high = df["High"] if "High" in df.columns else price
+        low = df["Low"] if "Low" in df.columns else price
+
+        # ATR-based barrier sizing (use 2x for SL, 3x for TP — matches strategy)
+        atr = df["atr"] if "atr" in df.columns else (price * 0.02)
+        sl_dist = 2.0 * atr  # downside barrier
+        tp_dist = 3.0 * atr  # upside barrier
+        max_holding = self.config.target_horizon * 2  # ~10 bars to resolve
+
+        target = pd.Series(np.nan, index=df.index, name="target")
+
+        prices_arr = price.values
+        highs_arr = high.values
+        lows_arr = low.values
+        sl_arr = sl_dist.values
+        tp_arr = tp_dist.values
+        n = len(prices_arr)
+
+        for i in range(n - max_holding):
+            entry = prices_arr[i]
+            sl_d = sl_arr[i]
+            tp_d = tp_arr[i]
+            if not (np.isfinite(entry) and np.isfinite(sl_d) and np.isfinite(tp_d) and sl_d > 0 and tp_d > 0):
+                continue
+
+            sl_level = entry - sl_d
+            tp_level = entry + tp_d
+
+            # Walk forward until a barrier hits or we time out
+            label = 1  # default = timeout
+            for j in range(1, max_holding + 1):
+                bar_high = highs_arr[i + j]
+                bar_low = lows_arr[i + j]
+                if not (np.isfinite(bar_high) and np.isfinite(bar_low)):
+                    continue
+                hit_sl = bar_low <= sl_level
+                hit_tp = bar_high >= tp_level
+                if hit_sl and hit_tp:
+                    # Both hit same bar — assume the worst (SL hit first intraday)
+                    label = 0
+                    break
+                if hit_sl:
+                    label = 0
+                    break
+                if hit_tp:
+                    label = 2
+                    break
+
+            target.iloc[i] = label
 
         return target
 
@@ -120,9 +169,11 @@ class MLSignalModel:
         result = pd.DataFrame(index=X.index)
         result["prediction"] = preds
         result["prediction_label"] = result["prediction"].map(self.LABELS)
-        result["prob_down"] = probs[:, 0]
-        result["prob_flat"] = probs[:, 1]
-        result["prob_up"] = probs[:, 2]
+        # Keep prob_down/up keys for backward compat with signal_combiner.
+        # 0=SL_HIT (loss), 1=TIMEOUT (flat), 2=TP_HIT (win)
+        result["prob_down"] = probs[:, 0]  # P(stop loss hit)
+        result["prob_flat"] = probs[:, 1]  # P(timeout)
+        result["prob_up"] = probs[:, 2]    # P(take profit hit)
 
         # Confidence = max probability - second highest probability
         sorted_probs = np.sort(probs, axis=1)
@@ -145,7 +196,7 @@ class MLSignalModel:
         preds = self.model.predict(X_clean)
         acc = accuracy_score(y_clean, preds)
 
-        report = classification_report(y_clean, preds, target_names=["DOWN", "FLAT", "UP"], output_dict=True)
+        report = classification_report(y_clean, preds, target_names=["SL_HIT", "TIMEOUT", "TP_HIT"], output_dict=True)
 
         return {
             "accuracy": acc,

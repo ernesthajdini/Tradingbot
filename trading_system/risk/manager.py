@@ -71,6 +71,30 @@ class RiskManager:
         self.current_positions: dict[str, dict] = {}  # ticker -> {shares, entry_price, sector}
         self.portfolio_value: float = 0.0
         self.daily_pnl: float = 0.0
+        self.vix_level: float | None = None  # set externally for vol scaling
+
+    def set_vix(self, vix: float):
+        """Inject current VIX level for volatility-scaled sizing."""
+        self.vix_level = vix
+
+    def _vol_scale_factor(self) -> float:
+        """
+        Scale position size by volatility regime:
+          VIX < 15: 1.2x (low vol, take more)
+          VIX 15-20: 1.0x (baseline)
+          VIX 20-30: 0.7x (elevated, reduce)
+          VIX > 30: 0.4x (high stress, defensive)
+        """
+        if self.vix_level is None:
+            return 1.0
+        v = self.vix_level
+        if v < 15:
+            return 1.2
+        if v < 20:
+            return 1.0
+        if v < 30:
+            return 0.7
+        return 0.4
 
     def size_position(
         self,
@@ -95,12 +119,15 @@ class RiskManager:
             return PositionSize(ticker, 0, 0, 0, 0, False, "Invalid stop loss")
 
         risk_budget = portfolio_value * self.config.max_portfolio_risk_per_trade
-        # Scale risk by confidence
-        adjusted_risk = risk_budget * signal.confidence
-        base_shares = int(adjusted_risk / risk_per_share)
+        # Scale risk by confidence AND market volatility
+        adjusted_risk = risk_budget * signal.confidence * self._vol_scale_factor()
+        # Minimum 1 share — if we approve a signal, we commit to at least 1 share
+        # (matches broker.execute_signals sizing logic)
+        base_shares = max(1, int(adjusted_risk / risk_per_share))
 
-        if base_shares <= 0:
-            return PositionSize(ticker, 0, 0, 0, 0, False, "Position too small")
+        # Sanity: don't buy if even 1 share exceeds max position size
+        if base_shares * entry > portfolio_value * self.config.max_position_pct * 1.5:
+            return PositionSize(ticker, 0, 0, 0, 0, False, "Position exceeds max size even at 1 share")
 
         dollar_amount = base_shares * entry
         position_pct = dollar_amount / portfolio_value

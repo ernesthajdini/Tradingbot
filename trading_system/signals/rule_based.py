@@ -15,6 +15,61 @@ class RuleBasedSignals:
     def __init__(self, config: SignalConfig | None = None):
         self.config = config or SignalConfig()
 
+    DEFAULT_WEIGHTS = {
+        "sig_ma_crossover": 0.20,
+        "sig_rsi_reversal": 0.15,
+        "sig_macd_momentum": 0.20,
+        "sig_bollinger_mean_revert": 0.15,
+        "sig_volume_breakout": 0.10,
+        "sig_trend_following": 0.20,
+    }
+
+    # Regime-specific strategy biases.
+    # Trend strategies dominate trending regimes; mean-reversion in choppy ones.
+    REGIME_MULTIPLIERS = {
+        "bullish": {  # uptrend — emphasize trend-following, downweight mean-revert
+            "sig_ma_crossover": 1.4,
+            "sig_macd_momentum": 1.4,
+            "sig_trend_following": 1.5,
+            "sig_volume_breakout": 1.3,
+            "sig_rsi_reversal": 0.5,
+            "sig_bollinger_mean_revert": 0.4,
+        },
+        "bearish": {  # downtrend — same trend bias, just direction flipped naturally
+            "sig_ma_crossover": 1.4,
+            "sig_macd_momentum": 1.4,
+            "sig_trend_following": 1.5,
+            "sig_volume_breakout": 1.3,
+            "sig_rsi_reversal": 0.5,
+            "sig_bollinger_mean_revert": 0.4,
+        },
+        "sideways": {  # range-bound — mean reversion shines, trend signals are noise
+            "sig_ma_crossover": 0.5,
+            "sig_macd_momentum": 0.6,
+            "sig_trend_following": 0.4,
+            "sig_volume_breakout": 0.8,
+            "sig_rsi_reversal": 1.6,
+            "sig_bollinger_mean_revert": 1.7,
+        },
+        "volatile": {  # high vol — be conservative, weight breakouts
+            "sig_ma_crossover": 0.7,
+            "sig_macd_momentum": 0.8,
+            "sig_trend_following": 0.7,
+            "sig_volume_breakout": 1.4,
+            "sig_rsi_reversal": 1.0,
+            "sig_bollinger_mean_revert": 0.9,
+        },
+        "unknown": {},  # no adjustment
+    }
+
+    def set_weights(self, weights: dict):
+        """Set strategy weights from adaptive learner."""
+        self._learned_weights = weights
+
+    def set_regime(self, regime: str):
+        """Set current market regime (bullish/bearish/sideways/volatile/unknown)."""
+        self._regime = regime
+
     def generate(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Generate rule-based signals from a feature-enriched DataFrame.
@@ -30,15 +85,19 @@ class RuleBasedSignals:
         signals["sig_volume_breakout"] = self._volume_breakout(df)
         signals["sig_trend_following"] = self._trend_following(df)
 
-        # Composite score: weighted average of all strategies
-        weights = {
-            "sig_ma_crossover": 0.20,
-            "sig_rsi_reversal": 0.15,
-            "sig_macd_momentum": 0.20,
-            "sig_bollinger_mean_revert": 0.15,
-            "sig_volume_breakout": 0.10,
-            "sig_trend_following": 0.20,
-        }
+        # Use learned weights if available, otherwise defaults
+        weights = dict(getattr(self, '_learned_weights', None) or self.DEFAULT_WEIGHTS)
+
+        # Apply regime multipliers to bias toward strategies that work in current market
+        regime = getattr(self, '_regime', 'unknown')
+        multipliers = self.REGIME_MULTIPLIERS.get(regime, {})
+        if multipliers:
+            for k in weights:
+                weights[k] *= multipliers.get(k, 1.0)
+            # Renormalize to sum to ~1.0
+            total = sum(weights.values())
+            if total > 0:
+                weights = {k: v / total for k, v in weights.items()}
 
         composite = sum(signals[col] * w for col, w in weights.items())
         signals["rule_score"] = composite

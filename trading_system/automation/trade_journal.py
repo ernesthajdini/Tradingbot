@@ -198,7 +198,7 @@ class TradeJournal:
             else:
                 pnl = (entry_price - exit_price) * shares
 
-            pnl_pct = (exit_price / entry_price - 1) if direction == "BUY" else (entry_price / exit_price - 1)
+            pnl_pct = (exit_price - entry_price) / entry_price if direction == "BUY" else (entry_price - exit_price) / entry_price
 
             entry_dt = datetime.strptime(entry_date, "%Y-%m-%d")
             holding_days = (datetime.now() - entry_dt).days

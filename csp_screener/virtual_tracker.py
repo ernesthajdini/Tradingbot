@@ -1,0 +1,381 @@
+"""
+Virtual position tracker — the heart of self-evaluation.
+
+For every weekly suggestion the screener makes, this module:
+  1. Opens a virtual cash-secured put position (logs OPEN event)
+  2. Re-prices it daily based on current underlying price
+  3. Applies the same exit rules a disciplined trader would (TP / DTE / SL)
+  4. Closes the virtual position when an exit triggers (logs CLOSE event)
+
+The result is a real, measurable performance record for the screener — even
+when the user takes ZERO real trades. Over months this answers the critical
+question: "would this strategy have made money?"
+
+We use a simplified pricing model for daily re-pricing:
+  - For a sold cash-secured put: virtual P&L = credit_received - (current_put_price)
+  - Current put price is computed via simplified Black-Scholes using:
+      * spot = today's close
+      * strike = stored strike
+      * t = remaining DTE / 365
+      * sigma = current realized vol of the underlying (proxy for IV)
+      * rate = 0 (risk-free rate negligible at these timescales)
+
+This is a PROXY, not the actual market option price. It's directionally correct
+enough to evaluate whether the strategy works, which is the whole point.
+"""
+
+from __future__ import annotations
+
+import logging
+import math
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+
+from csp_screener import config, journal
+from csp_screener.setup_generator import VirtualSetup
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Open / re-price / close
+# ---------------------------------------------------------------------------
+
+def open_virtual_position(setup: VirtualSetup, screen_id: str) -> str:
+    """
+    Log an OPEN event. Returns the virtual trade_id.
+    trade_id = "{screen_id}::{ticker}::{strike}::{expiration}".
+    """
+    trade_id = f"{screen_id}::{setup.ticker}::{setup.strike}::{setup.expiration}"
+    record = {
+        "event": "open",
+        "trade_id": trade_id,
+        "screen_id": screen_id,
+        "opened_at": datetime.now().isoformat(),
+        "ticker": setup.ticker,
+        "spot_at_open": setup.spot_at_screen,
+        "expiration": setup.expiration,
+        "dte_at_open": setup.dte,
+        "strike": setup.strike,
+        "credit_received": setup.estimated_credit_per_contract,
+        "max_loss": setup.max_loss_per_contract,
+        "breakeven": setup.breakeven,
+        "delta_at_open": setup.delta,
+        "iv_at_open": setup.iv,
+        "data_quality": setup.data_quality,
+    }
+    journal.append("virtual_trades", record)
+    logger.info(f"Virtual position opened: {trade_id}")
+    return trade_id
+
+
+def close_virtual_position(
+    trade_id: str,
+    exit_reason: str,
+    exit_spot: float,
+    final_put_price: float,
+    credit_received: float,
+    notes: str = "",
+    ticker: Optional[str] = None,
+    strike: Optional[float] = None,
+    expiration: Optional[str] = None,
+) -> dict:
+    """
+    Log a CLOSE event. PnL = credit - final_put_price (per contract).
+
+    ticker/strike/expiration are REQUIRED downstream (Supabase has NOT NULL
+    on ticker). If the caller doesn't pass them, we recover them from the
+    trade_id, which is formatted "{screen_id}::{ticker}::{strike}::{expiration}".
+    """
+    if ticker is None or strike is None or expiration is None:
+        parts = trade_id.split("::")
+        if len(parts) == 4:
+            ticker = ticker or parts[1]
+            if strike is None:
+                try:
+                    strike = float(parts[2])
+                except ValueError:
+                    strike = None
+            expiration = expiration or parts[3]
+
+    # Gross PnL is the frictionless mark. Net PnL subtracts realistic
+    # friction: commission both ways + slippage both ways (a % of the
+    # premium at entry and at exit). "pnl" is NET everywhere downstream —
+    # the whole point of the virtual record is honesty about expectancy.
+    pnl_gross = credit_received - final_put_price
+    friction = (
+        2 * config.COMMISSION_PER_CONTRACT
+        + config.SLIPPAGE_PCT_OF_PREMIUM * (credit_received + final_put_price)
+    )
+    pnl = pnl_gross - friction
+    record = {
+        "event": "close",
+        "trade_id": trade_id,
+        "ticker": ticker,
+        "strike": strike,
+        "expiration": expiration,
+        "closed_at": datetime.now().isoformat(),
+        "exit_reason": exit_reason,
+        "exit_spot": round(exit_spot, 4),
+        "final_put_price": round(final_put_price, 4),
+        "credit_received": round(credit_received, 4),
+        "pnl_gross": round(pnl_gross, 2),
+        "friction": round(friction, 2),
+        "pnl": round(pnl, 2),
+        "pnl_pct_of_credit": round(pnl / credit_received, 4) if credit_received else 0.0,
+        "notes": notes,
+    }
+    journal.append("virtual_trades", record)
+    logger.info(f"Virtual position closed: {trade_id} reason={exit_reason} pnl=${pnl:.2f}")
+    return record
+
+
+# ---------------------------------------------------------------------------
+# State reconstruction from event log (the only way to know what's open)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class OpenVirtualTrade:
+    trade_id: str
+    screen_id: str
+    opened_at: datetime
+    ticker: str
+    spot_at_open: float
+    expiration: datetime
+    dte_at_open: int
+    strike: float
+    credit_received: float
+    max_loss: float
+    breakeven: float
+    iv_at_open: Optional[float]
+
+
+def get_open_virtual_trades() -> list[OpenVirtualTrade]:
+    """
+    Replay the event log and return currently-open virtual trades.
+    A trade is open iff there's an OPEN event for trade_id without a matching
+    CLOSE event.
+    """
+    events = journal.read_all("virtual_trades")
+    open_ids = {}
+    for ev in events:
+        tid = ev.get("trade_id")
+        if not tid:
+            continue
+        if ev.get("event") == "open":
+            open_ids[tid] = ev
+        elif ev.get("event") == "close":
+            open_ids.pop(tid, None)
+
+    out = []
+    for tid, ev in open_ids.items():
+        try:
+            out.append(OpenVirtualTrade(
+                trade_id=tid,
+                screen_id=ev.get("screen_id", ""),
+                opened_at=datetime.fromisoformat(ev["opened_at"]),
+                ticker=ev["ticker"],
+                spot_at_open=float(ev["spot_at_open"]),
+                expiration=datetime.fromisoformat(ev["expiration"]),
+                dte_at_open=int(ev["dte_at_open"]),
+                strike=float(ev["strike"]),
+                credit_received=float(ev["credit_received"]),
+                max_loss=float(ev["max_loss"]),
+                breakeven=float(ev["breakeven"]),
+                iv_at_open=ev.get("iv_at_open"),
+            ))
+        except Exception as e:
+            logger.warning(f"Skipping malformed open event {tid}: {e}")
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Black-Scholes proxy for daily re-pricing
+# ---------------------------------------------------------------------------
+
+def _norm_cdf(x: float) -> float:
+    """Cumulative normal CDF using erf."""
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def black_scholes_put_price(
+    spot: float,
+    strike: float,
+    days_to_expiry: int,
+    sigma: float,
+    rate: float = 0.0,
+) -> float:
+    """
+    Simplified BS put price. Returns price PER SHARE (multiply by 100 for
+    contract-level dollars).
+
+    sigma is annualized volatility (e.g., 0.45 for 45%).
+    rate = 0 (negligible at these timescales and rate environments).
+    """
+    if days_to_expiry <= 0:
+        # At expiry: put value = max(strike - spot, 0)
+        return max(strike - spot, 0.0)
+    if sigma <= 0 or spot <= 0 or strike <= 0:
+        # Degenerate inputs — fall back to intrinsic value
+        return max(strike - spot, 0.0)
+
+    t = days_to_expiry / 365.0
+    sqrt_t = math.sqrt(t)
+    d1 = (math.log(spot / strike) + (rate + 0.5 * sigma * sigma) * t) / (sigma * sqrt_t)
+    d2 = d1 - sigma * sqrt_t
+    put = strike * math.exp(-rate * t) * _norm_cdf(-d2) - spot * _norm_cdf(-d1)
+    return max(put, 0.0)
+
+
+# ---------------------------------------------------------------------------
+# Daily mark-to-market + exit logic
+# ---------------------------------------------------------------------------
+
+def evaluate_open_position(
+    trade: OpenVirtualTrade,
+    current_spot: float,
+    current_iv: float,
+    today: Optional[datetime] = None,
+) -> dict:
+    """
+    Compute current virtual P&L and check if any exit rule fires.
+
+    Returns dict:
+      {
+        'current_put_price': float,
+        'pnl': float,
+        'pnl_pct_of_credit': float,
+        'dte_remaining': int,
+        'exit_now': bool,
+        'exit_reason': str or None,
+      }
+    """
+    today = today or datetime.now()
+    dte_remaining = max(0, (trade.expiration.date() - today.date()).days)
+    credit_per_share = trade.credit_received / 100.0
+
+    # Sigma: blend current realized vol with the IV captured at entry.
+    # Options systematically trade ABOVE realized vol (the vol risk premium),
+    # so pricing with RV alone underprices the put, marks profits too early,
+    # and inflates the win rate with take-profits that wouldn't have filled.
+    sigma = current_iv
+    if trade.iv_at_open:
+        try:
+            iv_open = float(trade.iv_at_open)
+            if iv_open > 0:
+                sigma = 0.5 * current_iv + 0.5 * iv_open
+        except (ValueError, TypeError):
+            pass
+
+    current_put_price_per_share = black_scholes_put_price(
+        spot=current_spot,
+        strike=trade.strike,
+        days_to_expiry=dte_remaining,
+        sigma=sigma,
+    )
+    current_put_price = current_put_price_per_share * 100.0
+
+    pnl = trade.credit_received - current_put_price
+    pnl_pct = pnl / trade.credit_received if trade.credit_received else 0.0
+
+    exit_now = False
+    exit_reason: Optional[str] = None
+
+    # Exit rule 1: 50% of max profit captured
+    if pnl_pct >= config.VIRTUAL_TP_PCT:
+        exit_now = True
+        exit_reason = "take_profit_50pct"
+    # Exit rule 2: <= 21 DTE
+    elif dte_remaining <= config.VIRTUAL_FORCE_EXIT_DTE:
+        exit_now = True
+        exit_reason = "force_exit_dte"
+    # Exit rule 3: loss reaches -2x credit (stop-loss)
+    elif pnl <= -config.VIRTUAL_SL_MULTIPLE * trade.credit_received:
+        exit_now = True
+        exit_reason = "stop_loss_2x_credit"
+    # Exit rule 4: at expiration
+    elif dte_remaining == 0:
+        exit_now = True
+        exit_reason = "expired"
+
+    return {
+        "current_put_price": round(current_put_price, 4),
+        "pnl": round(pnl, 2),
+        "pnl_pct_of_credit": round(pnl_pct, 4),
+        "dte_remaining": dte_remaining,
+        "exit_now": exit_now,
+        "exit_reason": exit_reason,
+    }
+
+
+def update_all_open_positions(
+    spot_resolver,
+    iv_resolver,
+    today: Optional[datetime] = None,
+) -> dict:
+    """
+    Loop through every open virtual trade, re-price, close if exit triggers.
+
+    spot_resolver(ticker) -> float: current spot price
+    iv_resolver(ticker) -> float: current vol estimate (use realized vol)
+
+    Returns summary: {'updated': N, 'closed': N, 'closed_pnl_total': $X}
+    """
+    today = today or datetime.now()
+    open_trades = get_open_virtual_trades()
+
+    summary = {
+        "updated": 0,
+        "closed": 0,
+        "closed_pnl_total": 0.0,
+        "details": [],
+    }
+
+    for trade in open_trades:
+        try:
+            spot = spot_resolver(trade.ticker)
+            iv = iv_resolver(trade.ticker)
+            if spot is None or iv is None:
+                logger.warning(f"No spot/iv for {trade.ticker}; skipping eval")
+                continue
+
+            result = evaluate_open_position(trade, spot, iv, today=today)
+            summary["updated"] += 1
+
+            if result["exit_now"]:
+                close_record = close_virtual_position(
+                    trade_id=trade.trade_id,
+                    exit_reason=result["exit_reason"],
+                    exit_spot=spot,
+                    final_put_price=result["current_put_price"],
+                    credit_received=trade.credit_received,
+                    notes=f"days_held={(today.date() - trade.opened_at.date()).days}, "
+                          f"dte_at_open={trade.dte_at_open}",
+                    ticker=trade.ticker,
+                    strike=trade.strike,
+                    expiration=trade.expiration.date().isoformat(),
+                )
+                summary["closed"] += 1
+                summary["closed_pnl_total"] += close_record["pnl"]
+                summary["details"].append({
+                    "trade_id": trade.trade_id,
+                    "action": "closed",
+                    "pnl": close_record["pnl"],
+                    "reason": result["exit_reason"],
+                })
+            else:
+                summary["details"].append({
+                    "trade_id": trade.trade_id,
+                    "action": "marked",
+                    "pnl_now": result["pnl"],
+                    "dte_remaining": result["dte_remaining"],
+                })
+        except Exception as e:
+            logger.error(f"Error processing virtual trade {trade.trade_id}: {e}")
+            continue
+
+    return summary

@@ -18,19 +18,27 @@ class DataConfig:
         # Mega-cap tech
         "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA",
         # Semiconductors
-        "AMD", "AVGO", "INTC", "QCOM", "TXN",
-        # Software / Cloud
-        "CRM", "ORCL", "CSCO", "NFLX", "ADBE", "NOW",
+        "AMD", "AVGO", "INTC", "QCOM", "TXN", "MU", "AMAT", "LRCX", "KLAC",
+        # Software / Cloud / Internet
+        "CRM", "ORCL", "CSCO", "NFLX", "ADBE", "NOW", "SNOW", "PLTR", "UBER",
+        "ABNB", "SHOP", "SQ",
         # Financials
-        "JPM", "BAC", "V", "MA", "GS", "MS",
+        "JPM", "BAC", "V", "MA", "GS", "MS", "WFC", "C", "AXP", "BLK", "SCHW",
         # Healthcare
-        "JNJ", "UNH", "ABBV", "LLY", "MRK", "TMO", "PFE",
+        "JNJ", "UNH", "ABBV", "LLY", "MRK", "TMO", "PFE", "BMY", "GILD", "CVS",
+        "ISRG", "DHR", "ABT",
         # Consumer
-        "HD", "PG", "COST", "PEP", "KO", "DIS", "NKE", "MCD", "SBUX",
+        "HD", "PG", "COST", "PEP", "KO", "DIS", "NKE", "MCD", "SBUX", "TGT",
+        "LOW", "WMT",
         # Energy / Industrials
-        "XOM", "CVX", "CAT", "BA", "UPS", "GE",
-        # Other
-        "WMT", "AMGN", "NEE", "PYPL",
+        "XOM", "CVX", "COP", "OXY", "CAT", "BA", "UPS", "GE", "HON", "DE",
+        "RTX", "LMT", "MMM",
+        # Telecom / Media
+        "T", "VZ", "CMCSA", "TMUS", "PYPL", "SPOT",
+        # Utilities / REITs
+        "AMGN", "NEE", "DUK", "SO", "AMT", "PLD",
+        # ETFs (high liquidity, useful for trend signals)
+        "SPY", "QQQ", "IWM", "DIA", "XLF", "XLE", "XLK",
     ])
     lookback_years: int = 5
     min_volume: int = 5_000_000  # minimum average daily dollar volume
@@ -80,13 +88,13 @@ class RiskConfig:
     max_correlation: float = 0.70  # max correlation between positions
     default_stop_loss_atr: float = 2.0  # stop loss at 2x ATR
     default_take_profit_atr: float = 3.0  # take profit at 3x ATR
-    max_open_positions: int = 3  # limited for $1K paper account
+    max_open_positions: int = 8  # $10K capital allows more diversification
 
 
 @dataclass
 class BacktestConfig:
     """Backtesting settings."""
-    initial_capital: float = 1_000.0
+    initial_capital: float = 10_000.0
     commission_per_trade: float = 0.0  # most brokers are zero-commission now
     slippage_bps: float = 5.0  # 5 basis points slippage estimate
     train_window_days: int = 504  # ~2 years of trading days

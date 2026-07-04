@@ -400,8 +400,9 @@ def cmd_journal(args):
             for t in closed_trades[:20]:
                 pnl = t.get('pnl', 0) or 0
                 pnl_pct = t.get('pnl_pct', 0) or 0
+                days = t.get('holding_days') or 0
                 print(f"  {t['ticker']:<8s} {t['direction']:<6s} ${pnl:>9.2f} "
-                      f"{pnl_pct:>+7.2%} {t.get('holding_days', 0):>5d} {t.get('exit_reason', '')}")
+                      f"{pnl_pct:>+7.2%} {days:>5d} {t.get('exit_reason', '')}")
 
         if not open_trades and not closed_trades:
             print("\n  No trades logged yet.\n")
@@ -481,15 +482,16 @@ def cmd_auto(args):
     scheduler = TradingScheduler(dry_run=dry_run)
 
     if args.action == "start":
+        from trading_system.automation.scheduler import et_to_local_str
         print(f"\n  Starting Trading Daemon ({'DRY RUN' if dry_run else 'LIVE'})")
-        print(f"  {'='*45}")
-        print(f"  Schedule (US Eastern Time):")
-        print(f"    09:00 AM  Pre-market scan + sentiment")
-        print(f"    09:35 AM  Signal execution")
-        print(f"    12:30 PM  Midday re-scan")
-        print(f"    04:05 PM  End-of-day summary")
-        print(f"    Saturday   Weekly model retrain")
-        print(f"  {'='*45}")
+        print(f"  {'='*52}")
+        print(f"  Schedule:          ET        Your Time")
+        print(f"    Pre-market:      {et_to_local_str(9, 0)}")
+        print(f"    Execute:         {et_to_local_str(9, 35)}")
+        print(f"    Midday:          {et_to_local_str(12, 30)}")
+        print(f"    EOD summary:     {et_to_local_str(16, 5)}")
+        print(f"    Retrain:         Saturday 10:00 AM ET")
+        print(f"  {'='*52}")
         print(f"  Press Ctrl+C to stop\n")
         scheduler.run_daemon()
 

@@ -102,9 +102,12 @@ class IBKRBroker:
     def _account_summary(self) -> dict:
         """Get account summary."""
         try:
-            self.ib.reqAccountSummary()
+            acct_sub = self.ib.reqAccountSummary()
             util.sleep(1)  # give IBKR time to respond
             summary = self.ib.accountSummary()
+
+            # Cancel subscription immediately to avoid Error 322 buildup
+            self.ib.cancelAccountSummary(acct_sub)
 
             values = {}
             for item in summary:
@@ -141,7 +144,7 @@ class IBKRBroker:
         """
         try:
             self.ib.reqMarketDataType(3)  # delayed data (free)
-            self.ib.reqMktData(contract, '', False, False)
+            self.ib.reqMktData(contract, '', True, False)  # snapshot=True (auto-cancels)
             util.sleep(2)  # give time for data to arrive
         except Exception:
             pass  # best effort — order may still work without it
@@ -152,6 +155,7 @@ class IBKRBroker:
         positions = self.ib.positions()
 
         results = []
+        contracts_to_cancel = []
         for pos in positions:
             ticker = pos.contract.symbol
             shares = int(pos.position)
@@ -161,7 +165,8 @@ class IBKRBroker:
             current_price = avg_cost  # fallback
             try:
                 contract = self._make_contract(ticker)
-                self.ib.reqMktData(contract, '', False, False)
+                self.ib.reqMktData(contract, '', True, False)  # snapshot=True
+                contracts_to_cancel.append(contract)
                 util.sleep(1)
                 ticker_data = self.ib.ticker(contract)
                 if ticker_data and ticker_data.last and ticker_data.last > 0:
@@ -184,6 +189,13 @@ class IBKRBroker:
                 "unrealized_pnl": round(pnl, 2),
                 "unrealized_pnl_pct": round(pnl_pct, 4),
             })
+
+        # Cancel all market data subscriptions to avoid leak
+        for contract in contracts_to_cancel:
+            try:
+                self.ib.cancelMktData(contract)
+            except Exception:
+                pass
 
         return results
 
@@ -233,67 +245,264 @@ class IBKRBroker:
         side: str,
         take_profit_price: float,
         stop_loss_price: float,
+        signal_entry_price: float | None = None,
         limit_price: float | None = None,
     ) -> dict:
         """
-        Submit a bracket order: entry + take profit + stop loss.
-        Uses market order for entry, GTC limit/stop for exits.
+        Submit a bracket: market entry, then TP/SL recalculated from actual fill.
+
+        The signal's TP/SL are RELATIVE distances from signal_entry_price.
+        We preserve those distances and re-anchor on the actual fill price,
+        so a stale signal price can never invert the bracket.
         """
         self._ensure_connected()
         contract = self._make_contract(ticker)
 
-        # Warm up market data to avoid Error 354 (blind trading precaution)
+        # Warm up market data
         self._warm_market_data(contract)
 
         action = side.upper()
         reverse_action = "SELL" if action == "BUY" else "BUY"
 
-        # Convert numpy floats to native Python floats
+        # Convert numpy floats
         take_profit_price = float(take_profit_price)
         stop_loss_price = float(stop_loss_price)
         shares = int(shares)
+        ref_entry = float(signal_entry_price) if signal_entry_price else None
 
-        # Parent: market order for immediate entry
+        # Compute SL/TP DISTANCES from the signal's reference entry.
+        # These distances are what really encode the strategy's risk/reward.
+        if ref_entry and ref_entry > 0:
+            if action == "BUY":
+                sl_distance = max(0.01, ref_entry - stop_loss_price)
+                tp_distance = max(0.01, take_profit_price - ref_entry)
+            else:
+                sl_distance = max(0.01, stop_loss_price - ref_entry)
+                tp_distance = max(0.01, ref_entry - take_profit_price)
+        else:
+            sl_distance = tp_distance = None
+
+        # Step 1: Submit market entry alone, wait for fill
         parent = MarketOrder(action, shares)
-        parent.orderId = self.ib.client.getReqId()
-        parent.transmit = False
         parent.tif = "GTC"
-
-        # Take profit: limit order
-        take_profit = LimitOrder(reverse_action, shares, take_profit_price)
-        take_profit.orderId = self.ib.client.getReqId()
-        take_profit.parentId = parent.orderId
-        take_profit.transmit = False
-        take_profit.tif = "GTC"
-
-        # Stop loss: stop order (this one transmits the whole group)
-        stop_loss = StopOrder(reverse_action, shares, stop_loss_price)
-        stop_loss.orderId = self.ib.client.getReqId()
-        stop_loss.parentId = parent.orderId
-        stop_loss.transmit = True  # transmit all three together
-        stop_loss.tif = "GTC"
-
-        logger.info(
-            f"Bracket: {action} {shares} {ticker} "
-            f"TP=${take_profit_price:.2f} SL=${stop_loss_price:.2f}"
-        )
+        logger.info(f"Submitting market {action} {shares} {ticker} (signal entry ~${ref_entry or 0:.2f})")
 
         trade_parent = self.ib.placeOrder(contract, parent)
+
+        # Wait up to 15 seconds for the parent to fill
+        fill_price = 0.0
+        for _ in range(15):
+            util.sleep(1)
+            status = trade_parent.orderStatus.status
+            filled = trade_parent.orderStatus.filled
+            if status == "Filled" and filled > 0:
+                fill_price = float(trade_parent.orderStatus.avgFillPrice)
+                break
+            if status in ("Cancelled", "Inactive"):
+                break
+
+        # If we didn't fill, return early — no bracket children to submit
+        if fill_price <= 0:
+            logger.warning(f"{ticker} parent order did not fill: status={trade_parent.orderStatus.status}")
+            return {
+                "parent_order_id": trade_parent.order.orderId,
+                "ticker": ticker, "side": action, "shares": shares,
+                "status": trade_parent.orderStatus.status,
+                "filled": trade_parent.orderStatus.filled,
+                "avg_fill_price": 0.0,
+                "take_profit_order_id": 0, "stop_loss_order_id": 0,
+            }
+
+        # Step 2: Recalculate TP/SL from the ACTUAL fill price
+        if sl_distance is not None and tp_distance is not None:
+            if action == "BUY":
+                final_sl = round(fill_price - sl_distance, 2)
+                final_tp = round(fill_price + tp_distance, 2)
+            else:
+                final_sl = round(fill_price + sl_distance, 2)
+                final_tp = round(fill_price - tp_distance, 2)
+        else:
+            # No reference entry given — use the signal's prices as-is
+            final_sl = stop_loss_price
+            final_tp = take_profit_price
+
+        logger.info(
+            f"Filled {ticker} @ ${fill_price:.2f}. "
+            f"Bracket children: TP=${final_tp:.2f} SL=${final_sl:.2f} "
+            f"(signal said TP=${take_profit_price:.2f} SL=${stop_loss_price:.2f})"
+        )
+
+        # Step 3: Submit TP and SL as standalone GTC orders (not technical OCA,
+        # but functionally equivalent — when one fills, the other becomes orphaned
+        # but won't have shares to trade since position is closed)
+        take_profit = LimitOrder(reverse_action, shares, final_tp)
+        take_profit.tif = "GTC"
         trade_tp = self.ib.placeOrder(contract, take_profit)
+
+        stop_loss = StopOrder(reverse_action, shares, final_sl)
+        stop_loss.tif = "GTC"
         trade_sl = self.ib.placeOrder(contract, stop_loss)
-        util.sleep(2)  # wait for fills
+
+        util.sleep(1)  # let orders register
 
         return {
             "parent_order_id": trade_parent.order.orderId,
             "ticker": ticker,
             "side": action,
             "shares": shares,
-            "status": trade_parent.orderStatus.status,
+            "status": "Filled",
             "filled": trade_parent.orderStatus.filled,
-            "avg_fill_price": trade_parent.orderStatus.avgFillPrice,
+            "avg_fill_price": fill_price,
             "take_profit_order_id": trade_tp.order.orderId,
             "stop_loss_order_id": trade_sl.order.orderId,
+            "final_take_profit": final_tp,
+            "final_stop_loss": final_sl,
         }
+
+    def manage_open_positions(self, journal_trades: list[dict]) -> list[dict]:
+        """
+        Active position management:
+        - Move stop to breakeven once price moves +1 ATR favorably
+        - Convert fixed stop to trailing stop (1 ATR) once price moves +1.5 ATR favorably
+
+        journal_trades: list of open trades from journal with entry_price, stop_loss, target_price.
+        Returns list of actions taken.
+        """
+        self._ensure_connected()
+        self.ib.reqMarketDataType(3)
+        actions = []
+
+        # Map ticker -> open SL orders
+        open_orders = self.ib.openTrades()
+        sl_by_ticker = {}  # ticker -> Trade (for STP orders)
+        for t in open_orders:
+            if t.order.orderType in ("STP", "TRAIL"):
+                sl_by_ticker[t.contract.symbol] = t
+
+        # IBKR positions to know what's actually held
+        positions = {p.contract.symbol: p for p in self.ib.positions()}
+
+        contracts_to_cancel = []
+        for trade in journal_trades:
+            ticker = trade["ticker"]
+            if ticker not in positions:
+                continue  # not actually held
+
+            pos = positions[ticker]
+            shares = int(abs(pos.position))
+            avg_cost = float(pos.avgCost)
+            direction = trade.get("direction", "BUY")
+
+            # Get current price
+            contract = self._make_contract(ticker)
+            self.ib.reqMktData(contract, '', True, False)  # snapshot
+            contracts_to_cancel.append(contract)
+            util.sleep(1)
+            tdata = self.ib.ticker(contract)
+            current_px = None
+            if tdata:
+                if tdata.last and tdata.last > 0:
+                    current_px = float(tdata.last)
+                elif tdata.close and tdata.close > 0:
+                    current_px = float(tdata.close)
+
+            if not current_px:
+                continue
+
+            entry = float(trade.get("entry_price", avg_cost))
+            current_sl = float(trade.get("stop_loss", 0))
+            target = float(trade.get("target_price", 0))
+
+            # Risk and reward distances (the unit of "ATR" in our setup)
+            if direction == "BUY":
+                risk_unit = entry - current_sl  # positive
+                profit_so_far = current_px - entry  # positive if winning
+            else:  # SELL/short
+                risk_unit = current_sl - entry  # positive
+                profit_so_far = entry - current_px  # positive if winning
+
+            if risk_unit <= 0:
+                continue
+
+            r_multiple = profit_so_far / risk_unit  # how many R have we gained?
+
+            # Find the existing SL order
+            sl_trade = sl_by_ticker.get(ticker)
+            if not sl_trade:
+                continue
+
+            existing_order_type = sl_trade.order.orderType
+            existing_sl_price = float(sl_trade.order.auxPrice or sl_trade.order.lmtPrice or 0)
+
+            # Decision logic
+            new_action = None
+
+            if r_multiple >= 1.5 and existing_order_type != "TRAIL":
+                # Upgrade to trailing stop (trail by 1R)
+                new_action = "trail"
+            elif r_multiple >= 1.0:
+                # Move stop to breakeven (entry + small buffer)
+                buffer = 0.01 * entry  # 0.5% buffer past breakeven
+                if direction == "BUY":
+                    new_breakeven = round(entry + buffer, 2)
+                    if new_breakeven > existing_sl_price:
+                        new_action = "breakeven"
+                else:
+                    new_breakeven = round(entry - buffer, 2)
+                    if new_breakeven < existing_sl_price:
+                        new_action = "breakeven"
+
+            if not new_action:
+                continue
+
+            # Cancel existing SL
+            try:
+                self.ib.cancelOrder(sl_trade.order)
+                util.sleep(0.5)
+            except Exception as e:
+                logger.debug(f"Could not cancel SL for {ticker}: {e}")
+                continue
+
+            reverse = "SELL" if direction == "BUY" else "BUY"
+
+            try:
+                if new_action == "trail":
+                    # Trailing stop with auxPrice = trail amount (in dollars)
+                    trail_order = Order()
+                    trail_order.action = reverse
+                    trail_order.orderType = "TRAIL"
+                    trail_order.totalQuantity = shares
+                    trail_order.auxPrice = round(risk_unit, 2)  # trail by 1R
+                    trail_order.tif = "GTC"
+                    self.ib.placeOrder(contract, trail_order)
+                    actions.append({
+                        "ticker": ticker, "action": "trailing_stop",
+                        "trail_amount": round(risk_unit, 2),
+                        "current_price": current_px, "r_multiple": round(r_multiple, 2),
+                    })
+                    logger.info(f"{ticker}: upgraded to TRAILING STOP (trail=${risk_unit:.2f}, R={r_multiple:.2f})")
+
+                elif new_action == "breakeven":
+                    new_sl = StopOrder(reverse, shares, new_breakeven)
+                    new_sl.tif = "GTC"
+                    self.ib.placeOrder(contract, new_sl)
+                    actions.append({
+                        "ticker": ticker, "action": "breakeven_stop",
+                        "new_stop": new_breakeven, "old_stop": existing_sl_price,
+                        "current_price": current_px, "r_multiple": round(r_multiple, 2),
+                    })
+                    logger.info(f"{ticker}: moved stop to BREAKEVEN ${new_breakeven:.2f} (R={r_multiple:.2f})")
+            except Exception as e:
+                logger.warning(f"Failed to update stop for {ticker}: {e}")
+
+        # Cleanup market data subscriptions
+        for c in contracts_to_cancel:
+            try:
+                self.ib.cancelMktData(c)
+            except Exception:
+                pass
+
+        return actions
 
     def cancel_order(self, order_id: int | None = None, trade: Trade | None = None) -> dict:
         """Cancel an open order by order_id or Trade object."""
@@ -427,6 +636,10 @@ class IBKRBroker:
             # Position sizing: risk 1% of capital per trade, scaled by confidence
             risk_per_share = abs(signal.entry_price - signal.stop_loss)
             if risk_per_share <= 0:
+                logger.warning(
+                    f"Skipping {signal.ticker} — invalid risk_per_share={risk_per_share} "
+                    f"(entry=${signal.entry_price}, stop=${signal.stop_loss})"
+                )
                 continue
             risk_budget = capital * 0.01 * signal.confidence
             shares = max(1, int(risk_budget / risk_per_share))
@@ -465,22 +678,29 @@ class IBKRBroker:
                         side=side,
                         take_profit_price=signal.target_price,
                         stop_loss_price=signal.stop_loss,
+                        signal_entry_price=signal.entry_price,
                     )
                     status = result.get("status", "unknown")
                     filled = result.get("filled", 0)
 
-                    # Only count as successful if actually filled or submitted
-                    if status in ("Cancelled", "Inactive") or (status == "PendingSubmit" and filled == 0):
-                        action["status"] = "rejected"
-                        action["error"] = f"Order {status} — not filled"
-                        logger.warning(f"Order REJECTED for {signal.ticker}: {status}")
-                    else:
+                    # Only count as successful if actually filled
+                    if status == "Filled" and filled > 0:
                         action["status"] = status
                         action["order_id"] = result.get("parent_order_id", "")
                         action["filled"] = True
+                        action["shares"] = int(filled)
+                        action["avg_fill_price"] = result.get("avg_fill_price", signal.entry_price)
+                        # Use the recalculated bracket prices (anchored to actual fill)
+                        action["stop_loss"] = result.get("final_stop_loss", signal.stop_loss)
+                        action["target"] = result.get("final_take_profit", signal.target_price)
+                    else:
+                        action["status"] = "rejected"
+                        action["error"] = f"Order {status} — filled={filled}"
+                        logger.warning(f"Order NOT FILLED for {signal.ticker}: status={status}, filled={filled}")
                 except Exception as e:
                     action["status"] = "error"
                     action["error"] = str(e)
+                    logger.error(f"Order EXCEPTION for {signal.ticker}: {type(e).__name__}: {e}", exc_info=True)
 
             results.append(action)
 

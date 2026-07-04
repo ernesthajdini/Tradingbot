@@ -15,10 +15,17 @@ class FeatureEngine:
     def __init__(self, config: FeatureConfig | None = None):
         self.config = config or FeatureConfig()
 
-    def compute_all(self, df: pd.DataFrame) -> pd.DataFrame:
+    def compute_all(
+        self,
+        df: pd.DataFrame,
+        benchmark_df: pd.DataFrame | None = None,
+        vix_df: pd.DataFrame | None = None,
+    ) -> pd.DataFrame:
         """
         Compute all features from OHLCV data.
         Input df must have columns: Open, High, Low, Close, Volume, Adj Close
+        Optional: benchmark_df (SPY) for cross-sectional features
+                  vix_df (^VIX) for macro features
         Returns DataFrame with original columns + all computed features.
         """
         feat = df.copy()
@@ -48,10 +55,53 @@ class FeatureEngine:
         for n in [1, 5, 10, 20]:
             feat[f"return_{n}d"] = price.pct_change(n)
 
+        # --- Cross-sectional: relative strength vs benchmark (SPY) ---
+        if benchmark_df is not None and not benchmark_df.empty:
+            feat = self._add_relative_strength(feat, price, benchmark_df)
+
+        # --- Macro: VIX context ---
+        if vix_df is not None and not vix_df.empty:
+            feat = self._add_macro_context(feat, vix_df)
+
         # --- Drop rows with NaN from warmup period ---
         # Don't drop here; let the caller decide based on the longest indicator period
 
         return feat
+
+    def _add_relative_strength(self, df: pd.DataFrame, price: pd.Series, bench: pd.DataFrame) -> pd.DataFrame:
+        """Cross-sectional features: how does this ticker rank vs the market."""
+        bench_price = bench["Adj Close"] if "Adj Close" in bench.columns else bench["Close"]
+        bench_aligned = bench_price.reindex(df.index, method="ffill")
+
+        # Relative return (ticker - SPY) at multiple horizons
+        for n in [5, 20, 60]:
+            ticker_ret = price.pct_change(n)
+            bench_ret = bench_aligned.pct_change(n)
+            df[f"rel_strength_{n}d"] = ticker_ret - bench_ret
+
+        # Beta proxy: rolling correlation
+        ticker_daily = price.pct_change()
+        bench_daily = bench_aligned.pct_change()
+        df["beta_60d"] = ticker_daily.rolling(60).cov(bench_daily) / bench_daily.rolling(60).var().replace(0, np.nan)
+
+        # Outperformance flag
+        df["outperforming_spy_20d"] = (df["rel_strength_20d"] > 0).astype(int)
+        return df
+
+    def _add_macro_context(self, df: pd.DataFrame, vix: pd.DataFrame) -> pd.DataFrame:
+        """Macro features: VIX level, regime context."""
+        vix_close = vix["Close"] if "Close" in vix.columns else vix["Adj Close"]
+        vix_aligned = vix_close.reindex(df.index, method="ffill")
+
+        df["vix_level"] = vix_aligned
+        df["vix_ma_20"] = vix_aligned.rolling(20).mean()
+        df["vix_relative"] = vix_aligned / df["vix_ma_20"].replace(0, np.nan)  # > 1 = elevated fear
+
+        # VIX regime flags
+        df["vix_low"] = (vix_aligned < 15).astype(int)  # complacent — risk-on
+        df["vix_high"] = (vix_aligned > 25).astype(int)  # fear — risk-off
+        df["vix_spike"] = (df["vix_relative"] > 1.3).astype(int)  # 30% above 20d MA
+        return df
 
     def _add_moving_averages(self, df: pd.DataFrame, price: pd.Series) -> pd.DataFrame:
         for period in self.config.sma_periods:

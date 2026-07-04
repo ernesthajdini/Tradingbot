@@ -28,10 +28,28 @@ logger = logging.getLogger(__name__)
 
 # US Eastern timezone (market hours)
 ET = ZoneInfo("America/New_York")
+# User's local timezone (GMT+2)
+LOCAL_TZ = ZoneInfo("Europe/Athens")
 
 # Market schedule
 MARKET_OPEN = (9, 30)    # 9:30 AM ET
 MARKET_CLOSE = (16, 0)   # 4:00 PM ET
+
+
+def fmt_dual(dt_et: datetime) -> str:
+    """Format a datetime showing both ET and local time."""
+    local = dt_et.astimezone(LOCAL_TZ)
+    return f"{dt_et.strftime('%H:%M ET')} ({local.strftime('%H:%M')} local)"
+
+
+def et_to_local_str(hour: int, minute: int) -> str:
+    """Convert an ET hour:minute to a 'HH:MM ET (HH:MM local)' string."""
+    now = datetime.now(ET)
+    et_dt = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    local_dt = et_dt.astimezone(LOCAL_TZ)
+    et_str = et_dt.strftime("%I:%M %p").lstrip("0")
+    local_str = local_dt.strftime("%I:%M %p").lstrip("0")
+    return f"{et_str} ET  ({local_str} local)"
 
 
 def is_market_day(dt: datetime | None = None) -> bool:
@@ -108,16 +126,22 @@ class TradingScheduler:
         This is the main job that runs on schedule.
         """
         now = datetime.now(ET)
-        logger.info(f"Starting automated run at {now.strftime('%Y-%m-%d %H:%M ET')}")
+        logger.info(f"Starting automated run at {fmt_dual(now)}")
 
         try:
+            # 0. Apply learned weights + regime to signal generation
+            learned = self.learner.get_learned_weights()
+            if learned.get("strategy_weights"):
+                self.system.rule_signals.set_weights(learned["strategy_weights"])
+            if learned.get("min_confidence"):
+                self.system.combiner.min_confidence = learned["min_confidence"]
+            regime = learned.get("regime", "unknown")
+            self.system.rule_signals.set_regime(regime)
+            logger.info(f"Regime={regime} | min_confidence={self.system.combiner.min_confidence:.2f}")
+
             # 1. Scan for signals
             logger.info("Step 1: Scanning for signals...")
             signals = self.system.scan(use_ml=True)
-
-            # Log all signals to journal
-            for sig in signals:
-                self.journal.log_signal(sig)
 
             if signals:
                 self.alerts.signal_alert(signals)
@@ -132,8 +156,14 @@ class TradingScheduler:
                     )
                     self.alerts.execution_alert(results, dry_run=self.dry_run)
 
-                    # Log executed trades to journal — ONLY if actually filled
-                    for sig, result in zip(signals, results):
+                    # Log trades to journal — match by ticker, not position
+                    result_by_ticker = {r["ticker"]: r for r in results}
+                    for sig in signals:
+                        result = result_by_ticker.get(sig.ticker)
+                        if not result:
+                            # Signal was skipped by broker (duplicate, no capital)
+                            self.journal.log_signal(sig, executed=False, execution_status="skipped")
+                            continue
                         status = result.get("status", "unknown")
                         signal_id = self.journal.log_signal(
                             sig, executed=True, execution_status=status
@@ -143,13 +173,17 @@ class TradingScheduler:
                                 signal_id=signal_id,
                                 ticker=sig.ticker,
                                 direction=sig.direction,
-                                shares=result.get("shares", 0),
-                                entry_price=sig.entry_price,
-                                stop_loss=sig.stop_loss,
-                                target_price=sig.target_price,
+                                shares=result.get("shares", 1),
+                                entry_price=result.get("avg_fill_price", sig.entry_price),
+                                # Use the recalculated bracket prices (anchored to actual fill)
+                                stop_loss=result.get("stop_loss", sig.stop_loss),
+                                target_price=result.get("target", sig.target_price),
                                 order_id=str(result.get("order_id", "")),
                             )
                 else:
+                    # Market closed — log signals as not executed
+                    for sig in signals:
+                        self.journal.log_signal(sig, executed=False, execution_status="market_closed")
                     logger.info("Market closed - skipping execution")
             else:
                 logger.info("No actionable signals")
@@ -318,13 +352,24 @@ class TradingScheduler:
 
                 if not is_market_day(now):
                     # Weekend — check for weekly retrain on Saturday
-                    if now.weekday() == 5 and now.hour == 10 and now.minute == 0:
+                    retrain_key = f"retrain_{now.strftime('%Y-%W')}"
+                    if now.weekday() == 5 and now.hour >= 10 and not self.state.get(retrain_key):
                         self.run_retrain()
+                        self.state[retrain_key] = now.isoformat()
+                        self._save_state()
+
+                    # Weekly digest on Sunday morning
+                    digest_key = f"digest_{now.strftime('%Y-%W')}"
+                    if now.weekday() == 6 and now.hour >= 9 and not self.state.get(digest_key):
+                        self.run_weekly_digest()
+                        self.state[digest_key] = now.isoformat()
+                        self._save_state()
 
                     # Sleep until next day
                     tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0)
                     sleep_seconds = (tomorrow - now).total_seconds()
-                    logger.info(f"Non-trading day. Sleeping until {tomorrow.strftime('%A %H:%M ET')}")
+                    tomorrow_local = tomorrow.astimezone(LOCAL_TZ)
+                    logger.info(f"Non-trading day. Sleeping until {tomorrow.strftime('%A %H:%M ET')} ({tomorrow_local.strftime('%H:%M')} local)")
                     time.sleep(min(sleep_seconds, 3600))  # max 1 hour sleep chunks
                     continue
 
@@ -341,12 +386,123 @@ class TradingScheduler:
                             self.state[last_key] = now.strftime("%H:%M")
                             self._save_state()
 
+                # Position management: every 20 minutes during market hours
+                # (move stops to breakeven, upgrade to trailing as positions move favorably)
+                if self._is_market_hours():
+                    pm_key = f"pm_{now.strftime('%Y-%m-%d_%H')}_{now.minute // 20}"
+                    if not self.state.get(pm_key):
+                        try:
+                            self.manage_positions()
+                            self.state[pm_key] = now.isoformat()
+                            self._save_state()
+                        except Exception as e:
+                            logger.debug(f"Position management failed: {e}")
+
                 # Sleep 30 seconds between checks
                 time.sleep(30)
 
         except KeyboardInterrupt:
             logger.info("Daemon stopped by user")
             self.alerts.send("Daemon Stopped", "Trading daemon stopped by user", level="info")
+
+    def run_weekly_digest(self):
+        """
+        Generate a weekly performance summary on Sunday.
+        Aggregates: trades, PnL, win rate, regime, top/bottom performers.
+        """
+        try:
+            closed_week = [
+                t for t in self.journal.get_closed_trades(days=7)
+                if t.get("pnl") is not None
+            ]
+            open_trades = self.journal.get_open_trades()
+
+            wins = [t for t in closed_week if (t.get("pnl") or 0) > 0]
+            losses = [t for t in closed_week if (t.get("pnl") or 0) <= 0]
+            total_pnl = sum((t.get("pnl") or 0) for t in closed_week)
+            win_rate = len(wins) / len(closed_week) if closed_week else 0
+
+            # All-time stats
+            all_closed = self.journal.get_closed_trades()
+            all_pnl = sum((t.get("pnl") or 0) for t in all_closed if t.get("pnl") is not None)
+            total_trades = len(all_closed)
+
+            # Current learner state
+            learned = self.learner.get_learned_weights()
+            regime = learned.get("regime", "unknown")
+            min_conf = learned.get("min_confidence", 0.30)
+            iterations = learned.get("learning_iterations", 0)
+
+            # Best / worst this week
+            ranked = sorted(closed_week, key=lambda t: (t.get("pnl_pct") or 0))
+            worst = ranked[0] if ranked else None
+            best = ranked[-1] if ranked else None
+
+            body = f"""
+WEEKLY DIGEST — {datetime.now(ET).strftime('%Y-%m-%d')}
+
+This week (last 7 days):
+  Closed trades:    {len(closed_week)}
+  Wins:             {len(wins)} ({win_rate:.0%})
+  Losses:           {len(losses)}
+  Net PnL:          ${total_pnl:+.2f}
+  Best trade:       {best['ticker'] if best else '-'} {(best.get('pnl_pct', 0) or 0)*100:+.2f}% (${best.get('pnl', 0):+.2f})
+  Worst trade:      {worst['ticker'] if worst else '-'} {(worst.get('pnl_pct', 0) or 0)*100:+.2f}% (${worst.get('pnl', 0):+.2f})
+
+Open positions:   {len(open_trades)}
+""".rstrip()
+            for t in open_trades[:10]:
+                body += f"\n  {t['ticker']:6s} {t['direction']:4s} {t['shares']} @ ${t['entry_price']:.2f}"
+
+            body += f"""
+
+System state:
+  Regime:           {regime}
+  Min confidence:   {min_conf:.2f}
+  Learning iters:   {iterations}
+
+All-time:
+  Total trades:     {total_trades}
+  Total PnL:        ${all_pnl:+.2f}
+"""
+            self.alerts.send("Weekly Digest", body, level="info")
+            logger.info("Weekly digest sent")
+        except Exception as e:
+            logger.error(f"Weekly digest failed: {e}")
+
+    def manage_positions(self):
+        """
+        Active position management: move stops to breakeven and upgrade to
+        trailing stops as positions move favorably. Runs every 20 minutes
+        during market hours.
+        """
+        try:
+            open_trades = self.journal.get_open_trades()
+            if not open_trades:
+                return
+
+            actions = self.system.broker.manage_open_positions(open_trades)
+            if actions:
+                logger.info(f"Position management: {len(actions)} actions taken")
+                for a in actions:
+                    self.alerts.send(
+                        f"Stop adjusted: {a['ticker']}",
+                        f"{a['action']} — current ${a['current_price']:.2f}, R={a.get('r_multiple', 0):.2f}",
+                        level="info",
+                    )
+                    # Update journal with new stop
+                    if a['action'] == 'breakeven_stop':
+                        # Find trade by ticker and update its stop_loss
+                        import sqlite3
+                        conn = sqlite3.connect(self.journal.db_path)
+                        conn.execute(
+                            "UPDATE trades SET stop_loss = ? WHERE ticker = ? AND status = 'open'",
+                            (a['new_stop'], a['ticker'])
+                        )
+                        conn.commit()
+                        conn.close()
+        except Exception as e:
+            logger.debug(f"Position management failed: {e}")
 
     def check_time_exits(self):
         """
@@ -402,6 +558,22 @@ class TradingScheduler:
 
             for trade in open_trades:
                 ticker = trade["ticker"]
+
+                # SAFETY: don't sync-close trades that were just opened today.
+                # IBKR positions API can lag a few seconds after a fill, and
+                # closing prematurely creates ghost trades with fake PnL.
+                # A real stop/target close shows up on the next scheduled job.
+                trade_ts = trade.get("timestamp", "")
+                if trade_ts:
+                    try:
+                        opened = datetime.fromisoformat(trade_ts)
+                        age_minutes = (datetime.now() - opened).total_seconds() / 60
+                        if age_minutes < 30:  # too fresh — let IBKR settle
+                            logger.debug(f"Skipping sync for {ticker}: opened {age_minutes:.1f} min ago")
+                            continue
+                    except Exception:
+                        pass
+
                 if ticker not in ibkr_tickers:
                     # Position is gone from IBKR — it was closed (stop or target hit)
                     # Try to determine exit price from the trade's stop/target

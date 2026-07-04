@@ -1,0 +1,30 @@
+name: CSP Screener — manual backfill to Supabase
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type YES to confirm backfill'
+        required: true
+        default: 'NO'
+
+jobs:
+  backfill:
+    if: ${{ github.event.inputs.confirm == 'YES' }}
+    runs-on: ubuntu-latest
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install supabase
+      - name: Backfill from JSONL
+        run: |
+          python -c "from csp_screener.supabase_sync import backfill_all_topics; \
+                    import json; \
+                    print(json.dumps(backfill_all_topics(), indent=2))"

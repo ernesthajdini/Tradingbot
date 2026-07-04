@@ -115,6 +115,19 @@ class BacktestEngine:
         for date in all_dates:
             date_str = date.strftime("%Y-%m-%d") if hasattr(date, "strftime") else str(date)
 
+            # Compute current portfolio value FIRST (before any changes)
+            # This is what we use as "capital" for sizing new positions today.
+            # Cash already includes short proceeds; for shorts we just subtract
+            # the buy-back liability at current price.
+            current_portfolio = cash
+            for ticker, pos in positions.items():
+                if ticker in price_data and date in price_data[ticker].index:
+                    px = price_data[ticker].loc[date, "Close"]
+                    if pos["direction"] == "BUY":
+                        current_portfolio += pos["shares"] * px
+                    else:
+                        current_portfolio -= pos["shares"] * px  # short liability
+
             # 1. Check stop-losses and take-profits for existing positions
             closed_tickers = []
             for ticker, pos in positions.items():
@@ -147,9 +160,23 @@ class BacktestEngine:
                         exit_price = pos["target"]
 
                 if exit_reason:
-                    exit_price *= slippage_mult if pos["direction"] == "SELL" else (1 / slippage_mult)
+                    # Apply slippage to exit price (worse for us)
+                    if pos["direction"] == "BUY":
+                        exit_price = exit_price / slippage_mult  # sell lower
+                    else:
+                        exit_price = exit_price * slippage_mult  # buy back higher
+
                     pnl = self._calc_pnl(pos, exit_price)
-                    cash += pos["shares"] * exit_price + pnl if pos["direction"] == "SELL" else pos["shares"] * exit_price
+
+                    # CORRECT cash accounting:
+                    # For BUY (long): we paid cash on entry, get cash back on exit (proceeds)
+                    # For SELL (short): we received cash on entry (proceeds),
+                    #                   pay cash on exit (cost to buy back)
+                    if pos["direction"] == "BUY":
+                        cash += pos["shares"] * exit_price  # sell proceeds
+                    else:
+                        cash -= pos["shares"] * exit_price  # buy back cost
+
                     hold_days = (date - pos["entry_date"]).days if hasattr(date, "__sub__") else 0
 
                     trades.append(Trade(
@@ -167,37 +194,52 @@ class BacktestEngine:
                     ))
                     closed_tickers.append(ticker)
 
+            # Single deletion of closed positions — no double accounting!
             for t in closed_tickers:
-                cash += positions[t]["shares"] * positions[t]["entry_price"]  # simplified
                 del positions[t]
 
             # 2. Process new signals for this date
+            max_positions = 8
             if date_str in signals_by_date:
                 for signal in signals_by_date[date_str]:
                     if signal.ticker in positions:
-                        continue  # already have a position
-                    if len(positions) >= 10:
-                        continue  # max positions limit
-
+                        continue
+                    if len(positions) >= max_positions:
+                        continue
                     if signal.direction == "HOLD":
                         continue
 
-                    # Position sizing: risk 1% of capital per trade
-                    risk_amount = capital * self.config.commission_per_trade if self.config.commission_per_trade > 0 else capital * 0.01
+                    # Position sizing: risk 1% of CURRENT portfolio (not initial capital)
+                    risk_amount = current_portfolio * 0.01
                     risk_per_share = abs(signal.entry_price - signal.stop_loss)
                     if risk_per_share <= 0:
                         continue
 
-                    shares = int(risk_amount / risk_per_share)
+                    shares = max(1, int(risk_amount / risk_per_share))
+
+                    # Cap at 10% of portfolio per position
+                    max_position_value = current_portfolio * 0.10
+                    max_shares_by_size = int(max_position_value / signal.entry_price)
+                    if max_shares_by_size > 0:
+                        shares = min(shares, max_shares_by_size)
+
+                    # Don't exceed available cash (with 5% buffer)
                     cost = shares * signal.entry_price * slippage_mult
-                    if cost > cash * 0.95:  # leave 5% cash buffer
+                    if cost > cash * 0.95:
                         shares = int((cash * 0.95) / (signal.entry_price * slippage_mult))
 
                     if shares <= 0:
                         continue
 
                     actual_entry = signal.entry_price * slippage_mult
-                    cash -= shares * actual_entry
+
+                    # CORRECT cash accounting:
+                    # For BUY: pay cash to acquire shares
+                    # For SELL (short): receive cash from short sale
+                    if signal.direction == "BUY":
+                        cash -= shares * actual_entry
+                    else:
+                        cash += shares * actual_entry
 
                     positions[signal.ticker] = {
                         "direction": signal.direction,
@@ -208,13 +250,20 @@ class BacktestEngine:
                         "target": signal.target_price,
                     }
 
-            # 3. Calculate equity
+            # 3. Calculate end-of-day equity
             portfolio_value = cash
             for ticker, pos in positions.items():
                 if ticker in price_data and date in price_data[ticker].index:
-                    portfolio_value += pos["shares"] * price_data[ticker].loc[date, "Close"]
+                    px = price_data[ticker].loc[date, "Close"]
                 else:
-                    portfolio_value += pos["shares"] * pos["entry_price"]
+                    px = pos["entry_price"]
+                # Mark-to-market: long = +shares*px, short = entry-px diff added to cash
+                if pos["direction"] == "BUY":
+                    portfolio_value += pos["shares"] * px
+                else:
+                    # Short: we already have the entry proceeds in cash;
+                    # liability to buy back = shares * px
+                    portfolio_value -= pos["shares"] * px
 
             equity_history[date] = portfolio_value
 

@@ -19,6 +19,7 @@ env/
 
 # Output files (generated at runtime)
 trading_system/output/
+csp_screener/output/
 *.db
 
 # Data cache
