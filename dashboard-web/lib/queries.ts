@@ -1,13 +1,15 @@
 /**
  * All Supabase queries used by server components.
- * Centralized so any schema change touches one file.
+ * Each call builds a per-request server client that carries the user's
+ * session cookie — required since reads are now authenticated-only.
  */
-import { supabase } from './supabase';
+import { createClient } from './supabase/server';
 import type {
   ClosedVirtualTrade, OpenVirtualTrade, Screen, SystemEvent,
 } from './types';
 
 export async function fetchLatestScreen(): Promise<Screen | null> {
+  const supabase = await createClient();
   const { data, error } = await supabase
     .from('screens')
     .select('*')
@@ -22,6 +24,7 @@ export async function fetchLatestScreen(): Promise<Screen | null> {
 }
 
 export async function fetchRecentScreens(limit = 30): Promise<Screen[]> {
+  const supabase = await createClient();
   const { data, error } = await supabase
     .from('screens')
     .select('*')
@@ -35,6 +38,7 @@ export async function fetchRecentScreens(limit = 30): Promise<Screen[]> {
 }
 
 export async function fetchOpenVirtualTrades(): Promise<OpenVirtualTrade[]> {
+  const supabase = await createClient();
   const { data, error } = await supabase
     .from('open_virtual_trades')
     .select('*')
@@ -47,6 +51,7 @@ export async function fetchOpenVirtualTrades(): Promise<OpenVirtualTrade[]> {
 }
 
 export async function fetchClosedVirtualTrades(limit = 500): Promise<ClosedVirtualTrade[]> {
+  const supabase = await createClient();
   const { data, error } = await supabase
     .from('closed_virtual_trades')
     .select('*')
@@ -60,6 +65,7 @@ export async function fetchClosedVirtualTrades(limit = 500): Promise<ClosedVirtu
 }
 
 export async function fetchRecentSystemEvents(limit = 30): Promise<SystemEvent[]> {
+  const supabase = await createClient();
   const { data, error } = await supabase
     .from('system_events')
     .select('*')

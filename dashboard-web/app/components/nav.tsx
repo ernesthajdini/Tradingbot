@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
+import { createClient } from '@/lib/supabase/client';
 
 const ITEMS = [
   { href: '/', label: 'Dashboard', icon: '📊' },
@@ -14,6 +15,18 @@ const ITEMS = [
 
 export function Nav() {
   const pathname = usePathname();
+  const router = useRouter();
+
+  // Hide nav chrome on the login page
+  if (pathname.startsWith('/login')) return null;
+
+  async function signOut() {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    router.push('/login');
+    router.refresh();
+  }
+
   return (
     <nav className="sticky top-0 z-40 bg-panel border-b border-border">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -21,7 +34,7 @@ export function Nav() {
           <Link href="/" className="text-accent font-semibold text-sm">
             CSP Screener
           </Link>
-          <div className="flex gap-1 sm:gap-2 overflow-x-auto">
+          <div className="flex items-center gap-1 sm:gap-2 overflow-x-auto">
             {ITEMS.map((item) => {
               const active = pathname === item.href;
               return (
@@ -39,6 +52,14 @@ export function Nav() {
                 </Link>
               );
             })}
+            <button
+              onClick={signOut}
+              className="ml-1 px-3 py-1.5 rounded text-sm whitespace-nowrap text-muted
+                         hover:text-danger hover:bg-danger/10 transition-colors"
+              title="Sign out"
+            >
+              ⎋<span className="hidden sm:inline ml-1.5">Sign out</span>
+            </button>
           </div>
         </div>
       </div>
