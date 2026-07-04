@@ -349,16 +349,21 @@ def render_full_email(
 
 def send_email(subject: str, html_body: str, to_address: Optional[str] = None) -> bool:
     """
-    Send HTML email via Gmail SMTP. Returns True on success.
-
-    Requires env: SMTP_USER, SMTP_PASSWORD.
+    Send HTML email. Tries providers in order:
+      1. Resend (if RESEND_API_KEY is set) — simplest, one API key
+      2. Gmail SMTP (if SMTP_USER + SMTP_PASSWORD are set)
+      3. Neither configured → log and return False (dashboard-only mode;
+         the run itself always continues)
     """
+    if os.environ.get("RESEND_API_KEY", "").strip():
+        return _send_via_resend(subject, html_body, to_address)
+
     smtp_user = os.environ.get("SMTP_USER", "").strip()
     smtp_password = os.environ.get("SMTP_PASSWORD", "").strip()
     if not smtp_user or not smtp_password:
-        logger.error(
-            "SMTP_USER / SMTP_PASSWORD not set; email NOT sent. "
-            "See README for Gmail App Password setup."
+        logger.warning(
+            "No email provider configured (RESEND_API_KEY or SMTP_USER/"
+            "SMTP_PASSWORD). Running in dashboard-only mode — email skipped."
         )
         return False
     to_addr = to_address or os.environ.get("SMTP_TO", smtp_user).strip()
@@ -378,6 +383,57 @@ def send_email(subject: str, html_body: str, to_address: Optional[str] = None) -
         return True
     except Exception as e:
         logger.error(f"SMTP send failed: {e}")
+        return False
+
+
+def _send_via_resend(subject: str, html_body: str, to_address: Optional[str] = None) -> bool:
+    """
+    Send via Resend's HTTP API (https://resend.com).
+
+    Env:
+      RESEND_API_KEY  — required
+      RESEND_FROM     — optional; defaults to onboarding@resend.dev, which
+                        works on the free tier WITHOUT a verified domain
+      RESEND_TO       — recipient; falls back to SMTP_TO then SMTP_USER.
+                        NOTE: on the free tier without a verified domain,
+                        Resend only delivers to the account owner's email.
+    """
+    import requests
+
+    api_key = os.environ.get("RESEND_API_KEY", "").strip()
+    from_addr = os.environ.get("RESEND_FROM", "").strip() or "CSP Screener <onboarding@resend.dev>"
+    to_addr = (
+        to_address
+        or os.environ.get("RESEND_TO", "").strip()
+        or os.environ.get("SMTP_TO", "").strip()
+        or os.environ.get("SMTP_USER", "").strip()
+    )
+    if not to_addr:
+        logger.error("RESEND_API_KEY set but no recipient (set RESEND_TO).")
+        return False
+
+    try:
+        resp = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "from": from_addr,
+                "to": [to_addr],
+                "subject": subject,
+                "html": html_body,
+            },
+            timeout=30,
+        )
+        if resp.status_code in (200, 201):
+            logger.info(f"Email sent via Resend to {to_addr}")
+            return True
+        logger.error(f"Resend API error {resp.status_code}: {resp.text[:300]}")
+        return False
+    except Exception as e:
+        logger.error(f"Resend send failed: {e}")
         return False
 
 

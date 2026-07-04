@@ -19,6 +19,8 @@ jobs:
       SMTP_USER: ${{ secrets.SMTP_USER }}
       SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
       SMTP_TO: ${{ secrets.SMTP_TO }}
+      RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+      RESEND_TO: ${{ secrets.RESEND_TO }}
       HEALTHCHECKS_PING_URL: ${{ secrets.HEALTHCHECKS_PING_URL }}
       PYTHONIOENCODING: utf-8
 
