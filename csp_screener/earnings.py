@@ -195,6 +195,38 @@ def fetch_batch_earnings(tickers: list[str]) -> dict[str, Optional[datetime]]:
     return out
 
 
+def fetch_ex_dividend(ticker: str) -> Optional[datetime]:
+    """
+    Next ex-dividend date via yfinance calendar (best-effort, cached daily).
+    Used for the LIVE-tier ex-div blackout: a short put assigned across the
+    ex-date costs an EU person 15% NRA withholding on the dividend
+    (playbook change #10). Returns None when unknown.
+    """
+    cache = _load_cache()
+    key = f"exdiv::{ticker}"
+    entry = cache.get(key, {})
+    if _cache_fresh(entry):
+        if entry.get("ex_dividend"):
+            return datetime.fromisoformat(entry["ex_dividend"])
+        return None
+
+    ex_div: Optional[datetime] = None
+    try:
+        import yfinance as yf
+        cal = yf.Ticker(ticker).calendar
+        if isinstance(cal, dict):
+            ex_div = _coerce_date(cal.get("Ex-Dividend Date"))
+    except Exception as e:
+        logger.debug(f"ex-div fetch failed for {ticker}: {e}")
+
+    cache[key] = {
+        "ex_dividend": ex_div.isoformat() if ex_div else None,
+        "fetched_at": datetime.now().isoformat(),
+    }
+    _save_cache(cache)
+    return ex_div
+
+
 def sanity_check_data_sources() -> dict:
     """
     Run a smoke test against well-known tickers that must have upcoming earnings.

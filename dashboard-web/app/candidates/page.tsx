@@ -33,7 +33,10 @@ export default async function CandidatesPage() {
     fetchRecentScreens(10),
   ]);
 
-  const candidates = (latest?.candidates_payload || []) as CandidatePayload[];
+  const all = (latest?.candidates_payload || []) as CandidatePayload[];
+  const liveCands = all.filter(c => c.tier === 'live');
+  const sandboxCands = all.filter(c => c.tier !== 'live');
+  const liveViable = liveCands.filter(c => c.setup);
 
   return (
     <div className="space-y-8">
@@ -41,17 +44,54 @@ export default async function CandidatesPage() {
         <h1 className="text-2xl font-semibold">Candidates</h1>
         <p className="text-sm text-muted mt-1">
           Last screen ran {latest ? new Date(latest.ran_at).toLocaleString() : 'never'}.
-          Underlying candidates only — choose your own contract.
         </p>
       </div>
 
-      {candidates.length === 0 ? (
+      <section>
+        <h2 className="text-lg font-medium mb-3 text-success">
+          LIVE tier — put credit spreads {liveViable.length === 0 && '· NO TRADE THIS WEEK'}
+        </h2>
+        {liveCands.length === 0 ? (
+          <div className="text-sm text-muted">No live-tier candidates recorded.</div>
+        ) : (
+          <div className="space-y-3">
+            {liveCands.map((c) => (
+              <div key={c.ticker} className={`bg-panel border rounded-lg p-5 ${
+                c.setup ? 'border-success/60' : 'border-border'
+              }`}>
+                <div className="flex items-baseline justify-between">
+                  <span className="text-lg font-mono font-semibold">{c.ticker}
+                    <span className="ml-2 text-xs text-muted font-normal">
+                      ${c.last_price.toFixed(2)} · RV pct {Math.round(c.rv_percentile)}
+                    </span>
+                  </span>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-semibold uppercase bg-success/20 text-success">
+                    {c.setup ? 'TICKET STAGED' : 'NO SPREAD'}
+                  </span>
+                </div>
+                {c.setup?.ticket ? (
+                  <pre className="mt-3 bg-bg border border-border rounded p-3 text-xs overflow-x-auto whitespace-pre-wrap">
+                    {c.setup.ticket}
+                  </pre>
+                ) : (
+                  <div className="mt-2 text-xs text-muted italic">
+                    {c.skip_reason || 'No spread passed the gates (credit/friction/liquidity).'}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <h2 className="text-lg font-medium -mb-4">Sandbox tier — CSP research (paper only)</h2>
+      {sandboxCands.length === 0 ? (
         <div className="bg-panel border border-border rounded-lg p-8 text-center text-muted">
-          No candidates in the latest screen.
+          No sandbox candidates in the latest screen.
         </div>
       ) : (
         <section className="space-y-3">
-          {candidates.map((c) => {
+          {sandboxCands.map((c) => {
             const s = c.setup;
             return (
               <div key={c.ticker} className="bg-panel border border-border rounded-lg p-5">

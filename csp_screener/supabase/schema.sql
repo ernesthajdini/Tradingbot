@@ -66,9 +66,15 @@ CREATE TABLE IF NOT EXISTS public.virtual_trades (
     exit_reason TEXT,
     exit_spot NUMERIC(10, 4),
     final_put_price NUMERIC(12, 4),
-    pnl NUMERIC(12, 2),               -- NET of commission + slippage
+    pnl NUMERIC(12, 2),               -- NET of commission + slippage (base)
     pnl_gross NUMERIC(12, 2),         -- frictionless mark
-    friction NUMERIC(12, 2),          -- commissions + slippage charged
+    friction NUMERIC(12, 2),          -- commissions + slippage charged (base)
+    pnl_pessimistic NUMERIC(12, 2),   -- NET at pessimistic slippage band
+    eur_usd_rate NUMERIC(10, 4),      -- EURUSD at close
+    pnl_eur NUMERIC(12, 2),           -- net PnL in EUR (the real scoreboard)
+    structure TEXT DEFAULT 'csp',     -- 'csp' | 'put_credit_spread'
+    tier TEXT DEFAULT 'sandbox',      -- 'live' | 'sandbox'
+    long_strike NUMERIC(10, 4),       -- spread long leg
     pnl_pct_of_credit NUMERIC(8, 4),
     notes TEXT,
     -- Bookkeeping
@@ -104,22 +110,49 @@ CREATE INDEX IF NOT EXISTS idx_se_event ON public.system_events(event);
 -- which reference the newer columns). All idempotent.
 -- ---------------------------------------------------------------------------
 DO $$
+DECLARE
+    col RECORD;
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns
                    WHERE table_schema='public' AND table_name='screens'
                      AND column_name='recommendations_payload') THEN
         ALTER TABLE public.screens ADD COLUMN recommendations_payload JSONB;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                   WHERE table_schema='public' AND table_name='virtual_trades'
-                     AND column_name='pnl_gross') THEN
-        ALTER TABLE public.virtual_trades ADD COLUMN pnl_gross NUMERIC(12, 2);
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                   WHERE table_schema='public' AND table_name='virtual_trades'
-                     AND column_name='friction') THEN
-        ALTER TABLE public.virtual_trades ADD COLUMN friction NUMERIC(12, 2);
-    END IF;
+    -- Two-tier / playbook columns on screens
+    FOR col IN SELECT * FROM (VALUES
+        ('live_viable', 'INTEGER'),
+        ('no_trade_week', 'BOOLEAN'),
+        ('post_spike_window', 'BOOLEAN'),
+        ('fomc_days', 'INTEGER'),
+        ('eur_usd_rate', 'NUMERIC(10,4)')
+    ) AS t(name, type)
+    LOOP
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                       WHERE table_schema='public' AND table_name='screens'
+                         AND column_name=col.name) THEN
+            EXECUTE format('ALTER TABLE public.screens ADD COLUMN %I %s',
+                           col.name, col.type);
+        END IF;
+    END LOOP;
+    -- Friction + two-tier columns on virtual_trades
+    FOR col IN SELECT * FROM (VALUES
+        ('pnl_gross', 'NUMERIC(12,2)'),
+        ('friction', 'NUMERIC(12,2)'),
+        ('pnl_pessimistic', 'NUMERIC(12,2)'),
+        ('eur_usd_rate', 'NUMERIC(10,4)'),
+        ('pnl_eur', 'NUMERIC(12,2)'),
+        ('structure', 'TEXT'),
+        ('tier', 'TEXT'),
+        ('long_strike', 'NUMERIC(10,4)')
+    ) AS t(name, type)
+    LOOP
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                       WHERE table_schema='public' AND table_name='virtual_trades'
+                         AND column_name=col.name) THEN
+            EXECUTE format('ALTER TABLE public.virtual_trades ADD COLUMN %I %s',
+                           col.name, col.type);
+        END IF;
+    END LOOP;
 END$$;
 
 
@@ -163,6 +196,12 @@ SELECT
     c.pnl,
     c.pnl_gross,
     c.friction,
+    c.pnl_pessimistic,
+    c.eur_usd_rate,
+    c.pnl_eur,
+    COALESCE(c.structure, o.structure, 'csp') AS structure,
+    COALESCE(c.tier, o.tier, 'sandbox') AS tier,
+    COALESCE(c.long_strike, o.long_strike) AS long_strike,
     c.pnl_pct_of_credit,
     c.notes
 FROM public.virtual_trades o

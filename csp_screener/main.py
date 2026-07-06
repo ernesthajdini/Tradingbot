@@ -63,7 +63,7 @@ logger = logging.getLogger("csp_screener.main")
 # Pipeline steps
 # ---------------------------------------------------------------------------
 
-def step_mark_virtual_to_market(price_data: dict) -> dict:
+def step_mark_virtual_to_market(price_data: dict, eur_usd_rate=None) -> dict:
     """
     Daily/Sunday update of open virtual positions. Uses current spot + realized
     vol as the IV proxy for the BS re-pricer.
@@ -79,7 +79,8 @@ def step_mark_virtual_to_market(price_data: dict) -> dict:
         # Use 30-day realized vol as IV proxy (slightly longer than 20 to dampen)
         return data_pipeline.recent_realized_vol(df, window=30) or 0.30  # 30% default
 
-    summary = virtual_tracker.update_all_open_positions(spot_resolver, iv_resolver)
+    summary = virtual_tracker.update_all_open_positions(
+        spot_resolver, iv_resolver, eur_usd_rate=eur_usd_rate)
     logger.info(
         f"Virtual mark-to-market: {summary['updated']} updated, "
         f"{summary['closed']} closed (PnL ${summary['closed_pnl_total']:+.2f})"
@@ -87,10 +88,20 @@ def step_mark_virtual_to_market(price_data: dict) -> dict:
     return summary
 
 
-def step_build_contexts(price_data: dict, earnings_data: dict, now: datetime) -> list[TickerContext]:
-    """Build TickerContext for every universe ticker."""
+def step_build_contexts(
+    price_data: dict,
+    earnings_data: dict,
+    now: datetime,
+    tier: str = "sandbox",
+) -> list[TickerContext]:
+    """Build TickerContext for every ticker in the given tier's universe."""
+    if tier == "live":
+        price_min, price_max = config.LIVE_PRICE_MIN, config.LIVE_PRICE_MAX
+    else:
+        price_min, price_max = config.PRICE_MIN, config.PRICE_MAX
+
     contexts = []
-    for ticker in universe.get_universe():
+    for ticker in universe.get_universe(tier):
         df = price_data.get(ticker)
         if df is None or df.empty:
             continue
@@ -100,6 +111,8 @@ def step_build_contexts(price_data: dict, earnings_data: dict, now: datetime) ->
             avg_volume_20d=data_pipeline.avg_volume_20d(df) or 0.0,
             next_earnings=earnings_data.get(ticker),
             price_history=(df["Adj Close"] if "Adj Close" in df.columns else df["Close"]).copy(),
+            price_min=price_min,
+            price_max=price_max,
         )
         contexts.append(ctx)
     return contexts
@@ -152,12 +165,41 @@ def step_filter_and_rank(
     return ranked
 
 
-def step_generate_setups(ranked, ibkr_client=None) -> list[dict]:
-    """For each ranked candidate, generate a virtual setup."""
+def step_generate_setups(ranked, ibkr_client=None, tier: str = "sandbox") -> list[dict]:
+    """
+    For each ranked candidate, generate a virtual setup.
+    LIVE tier: put credit spreads with strict gates + staged tickets,
+    plus the ex-dividend blackout. SANDBOX: original CSP setups.
+    """
     out = []
     for r in ranked:
+        # LIVE-tier ex-div blackout (playbook change #10): a short put
+        # assigned across the ex-date triggers 15% NRA withholding.
+        if tier == "live":
+            try:
+                ex_div = earnings.fetch_ex_dividend(r.ticker)
+                if ex_div is not None:
+                    days_out = (ex_div.date() - datetime.now().date()).days
+                    if 0 <= days_out <= config.DTE_MAX:
+                        logger.info(f"[live] {r.ticker} skipped: ex-div in {days_out}d")
+                        out.append({
+                            "ticker": r.ticker, "last_price": r.last_price,
+                            "rv_percentile": r.rv_percentile,
+                            "rv_20d_annual": r.rv_20d_annual,
+                            "avg_volume_20d": r.avg_volume_20d,
+                            "next_earnings_days": r.next_earnings_days,
+                            "rank": r.rank, "tier": tier, "setup": None,
+                            "skip_reason": f"ex-dividend in {days_out}d (blackout)",
+                        })
+                        continue
+            except Exception as e:
+                logger.debug(f"ex-div check failed for {r.ticker}: {e}")
+
         chain = options_data.fetch_chain(r.ticker, r.last_price, ibkr_client=ibkr_client)
-        setup = setup_generator.generate_setup(r.ticker, r.last_price, chain)
+        if tier == "live":
+            setup = setup_generator.generate_spread_setup(r.ticker, r.last_price, chain)
+        else:
+            setup = setup_generator.generate_setup(r.ticker, r.last_price, chain)
         out.append({
             "ticker": r.ticker,
             "last_price": r.last_price,
@@ -166,6 +208,7 @@ def step_generate_setups(ranked, ibkr_client=None) -> list[dict]:
             "avg_volume_20d": r.avg_volume_20d,
             "next_earnings_days": r.next_earnings_days,
             "rank": r.rank,
+            "tier": tier,
             "setup": setup.to_dict() if setup else None,
         })
     return out
@@ -233,6 +276,9 @@ def step_compute_open_positions_data(price_data: dict) -> list[dict]:
             "credit_received": t.credit_received,
             "pnl_now": result["pnl"],
             "pnl_pct_now": result["pnl_pct_of_credit"],
+            "tier": t.tier,
+            "structure": t.structure,
+            "long_strike": t.long_strike,
         })
     return rows
 
@@ -304,14 +350,31 @@ def run_weekly_screen(force_send: bool = False, use_ibkr: bool = True) -> int:
         except Exception as e:
             logger.debug(f"Hydration skipped: {e}")
 
-        # 0. Fetch all required market data up front
-        tickers = universe.get_universe()
-        logger.info(f"Universe: {len(tickers)} tickers")
+        # 0. Fetch all required market data up front (both tiers at once)
+        tickers = universe.all_tickers()
+        logger.info(f"Universe: {len(tickers)} tickers "
+                    f"(live {len(universe.get_universe('live'))}, "
+                    f"sandbox {len(universe.get_universe('sandbox'))})")
         price_data = data_pipeline.fetch_prices(tickers, lookback_days=400)
         logger.info(f"Price data: {len(price_data)} tickers loaded")
 
         vix = data_pipeline.get_vix_level()
         logger.info(f"VIX: {vix}")
+
+        eur_usd = data_pipeline.get_eurusd_rate() if config.TRACK_EUR else None
+        logger.info(f"EURUSD: {eur_usd}")
+
+        post_spike = data_pipeline.get_vix_post_spike_window(
+            kill_level=config.VIX_KILL_SWITCH,
+            recovery_level=config.VIX_POST_SPIKE_RECOVERY,
+            lookback_days=config.VIX_SPIKE_LOOKBACK_DAYS,
+        )
+        if post_spike:
+            logger.info("POST-SPIKE WINDOW: VIX spiked and recovered — "
+                        "richest premium-selling regime")
+
+        from csp_screener import fomc
+        fomc_days = fomc.days_to_fomc()
 
         # 0b. VIX kill switch
         if vix is not None and vix > config.VIX_KILL_SWITCH:
@@ -321,7 +384,7 @@ def run_weekly_screen(force_send: bool = False, use_ibkr: bool = True) -> int:
             return 0
 
         # 1. Mark virtual positions to market FIRST (before opening new ones)
-        mark_summary = step_mark_virtual_to_market(price_data)
+        mark_summary = step_mark_virtual_to_market(price_data, eur_usd_rate=eur_usd)
 
         # 2. Fetch earnings for the universe (cached daily inside)
         earnings_data = earnings.fetch_batch_earnings(tickers)
@@ -342,28 +405,36 @@ def run_weekly_screen(force_send: bool = False, use_ibkr: bool = True) -> int:
             except Exception as e:
                 logger.debug(f"Earnings canary failed: {e}")
 
-        # 3. Build contexts, filter, rank (learning-aware)
-        contexts = step_build_contexts(price_data, earnings_data, now)
-        ranked = step_filter_and_rank(contexts, now, vix=vix)
+        # 3. Build contexts, filter, rank — BOTH TIERS (learning-aware)
+        ibkr_client = _try_connect_ibkr() if use_ibkr else None
 
-        # 4. Try to connect to IBKR for option chains (optional)
-        ibkr_client = None
-        if use_ibkr:
-            ibkr_client = _try_connect_ibkr()
+        # LIVE tier: $20-60 liquid names -> put credit spreads + tickets
+        live_contexts = step_build_contexts(price_data, earnings_data, now, tier="live")
+        live_ranked = step_filter_and_rank(live_contexts, now, vix=vix)
+        live_candidates = step_generate_setups(live_ranked, ibkr_client=ibkr_client, tier="live")
+        live_viable = [c for c in live_candidates if c.get("setup")]
+        no_trade_week = len(live_viable) == 0
+        if no_trade_week:
+            logger.info("LIVE tier: NO TRADE THIS WEEK — no spread passed the gates")
 
-        # 5. Generate setups
-        candidates = step_generate_setups(ranked, ibkr_client=ibkr_client)
+        # SANDBOX tier: original $5-25 CSP research track (unchanged signals)
+        sandbox_contexts = step_build_contexts(price_data, earnings_data, now, tier="sandbox")
+        sandbox_ranked = step_filter_and_rank(sandbox_contexts, now, vix=vix)
+        sandbox_candidates = step_generate_setups(sandbox_ranked, ibkr_client=ibkr_client, tier="sandbox")
 
-        # 5b. Disconnect IBKR
         if ibkr_client is not None:
             try:
                 ibkr_client.disconnect()
             except Exception:
                 pass
 
-        # 6. Open virtual positions for candidates that have setups
+        candidates = live_candidates + sandbox_candidates
+        ranked = live_ranked + sandbox_ranked  # for health check counts
+
+        # 6. Open virtual positions for BOTH tiers (unthrottled paper engine)
         opened = step_open_virtual_positions(candidates, screen_id)
-        logger.info(f"Opened {len(opened)} virtual positions")
+        logger.info(f"Opened {len(opened)} virtual positions "
+                    f"({len(live_viable)} live-tier viable)")
 
         # 7. Compute summaries + open positions data for email
         summaries = evaluator.all_periods_summary()
@@ -388,15 +459,23 @@ def run_weekly_screen(force_send: bool = False, use_ibkr: bool = True) -> int:
         # 8. Assemble health
         health = assemble_health(vix, earnings_data, len(ranked), earnings_canary)
 
-        # 9. Render + send email
+        # 9. Render + send email (two-tier layout)
         week_label = now.strftime("Week of %Y-%m-%d")
+        flags = {
+            "no_trade_week": no_trade_week,
+            "post_spike_window": post_spike,
+            "fomc_days": fomc_days,
+            "eur_usd": eur_usd,
+        }
         subject, html = notify.render_full_email(
             week_label=week_label,
-            candidates=candidates,
+            candidates=sandbox_candidates,
             summaries=summaries,
             open_positions=open_positions,
             health=health,
             recommendations=recommendations,
+            live_candidates=live_candidates,
+            flags=flags,
         )
         preview_path = notify.write_preview(subject, html)
         sent = notify.send_email(subject, html)
@@ -419,6 +498,11 @@ def run_weekly_screen(force_send: bool = False, use_ibkr: bool = True) -> int:
             "summaries": {k: v.as_dict() for k, v in summaries.items()},
             "tickers_in_email": [c["ticker"] for c in candidates],
             "candidates_payload": candidates,
+            "live_viable": len(live_viable),
+            "no_trade_week": no_trade_week,
+            "post_spike_window": post_spike,
+            "fomc_days": fomc_days,
+            "eur_usd_rate": eur_usd,
             "recommendations": [
                 {"severity": r.severity, "category": r.category,
                  "title": r.title, "detail": r.detail,

@@ -24,14 +24,28 @@ for d in (OUTPUT_DIR, JOURNAL_DIR, LOGS_DIR, CACHE_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------
-# Universe filter thresholds
+# Universe filter thresholds — TWO TIERS (per OPTIONS_PROFIT_PLAYBOOK.md)
 # ---------------------------------------------------------------------------
-# Price band for CSP candidates.
-# Bottom: avoid penny-stock noise and assignment risk.
-# Top: cap at ~$25 so a single contract collateral (100 * strike) fits the
-# $1K-$2.5K capital range. SPY/AAPL/NVDA are intentionally NOT eligible.
+# LIVE tier: liquid, penny-quoted $20-60 names traded as PUT CREDIT SPREADS.
+# These are the candidates you'd actually put money on. Strict gates:
+# live quotes only, min net credit after friction, tight spreads.
+LIVE_PRICE_MIN: float = 20.0
+LIVE_PRICE_MAX: float = 60.0
+
+# SANDBOX tier: the original $5-25 CSP universe. Virtual-only research —
+# it must independently prove itself on 100+ paper trades under the
+# pessimistic friction band before any promotion. (Playbook change #5.)
 PRICE_MIN: float = 5.0
 PRICE_MAX: float = 25.0
+
+# Put credit spread construction (LIVE tier)
+SPREAD_WIDTH_NARROW: float = 1.0   # $1 wide for underlyings <= $30
+SPREAD_WIDTH_WIDE: float = 2.0     # $2 wide above $30
+MAX_RISK_PER_SPREAD: float = 130.0  # ~5% of a $2.6K account; playbook M7 sizing
+
+# LIVE-tier viability gates (playbook change #7)
+MIN_NET_CREDIT_AFTER_FRICTION: float = 25.0   # dollars, else VOID
+MAX_FRICTION_PCT_OF_CREDIT: float = 0.20      # friction >20% of credit = VOID
 
 # Liquidity floor — 1M+ shares average daily volume.
 # Lower = wider option bid/ask spreads = retail-killer slippage.
@@ -82,8 +96,20 @@ ACCOUNT_DRAWDOWN_KILL_SWITCH: float = 0.20  # 20% account drawdown halts new
 # ---------------------------------------------------------------------------
 # Output limits
 # ---------------------------------------------------------------------------
-MAX_CANDIDATES_IN_EMAIL: int = 5    # ranked top-5 only
-MAX_VIRTUAL_OPEN: int = 10          # cap virtual portfolio size
+MAX_CANDIDATES_IN_EMAIL: int = 5    # ranked top-5 PER TIER
+# Unthrottled paper engine (playbook change #8): the paper pool needs
+# 200+ trades by month 6, which weekly 4-5 opens can't reach at cap 10.
+MAX_VIRTUAL_OPEN: int = 24
+
+# ---------------------------------------------------------------------------
+# Vol-spike playbook (playbook change #11)
+# ---------------------------------------------------------------------------
+# VIX > KILL blocks NEW entries only; open defined-risk positions ride to
+# their normal exits. POST-SPIKE window: VIX was above KILL within the
+# lookback and has now fallen back through RECOVERY — historically the
+# richest premium-selling regime a patient 1-lot trader can access.
+VIX_POST_SPIKE_RECOVERY: float = 30.0
+VIX_SPIKE_LOOKBACK_DAYS: int = 10
 
 # ---------------------------------------------------------------------------
 # Anti-tinker
@@ -108,11 +134,22 @@ SMTP_PORT: int = 587
 # ---------------------------------------------------------------------------
 # Trading friction (applied to VIRTUAL PnL so the track record is honest)
 # ---------------------------------------------------------------------------
-# IBKR US options commission per contract, each way.
-COMMISSION_PER_CONTRACT: float = 0.65
-# Slippage as a fraction of premium, each way. Retail fills on low-priced
-# options realistically give up ~5% of premium vs mid.
+# IBKR Fixed pricing has a $1.00 ORDER MINIMUM which always binds at 1-lot.
+# $0.65 was too kind. (Playbook change #2.)
+COMMISSION_PER_CONTRACT: float = 1.00
+# Slippage as a fraction of premium, each way.
+# BASE = plausible fill quality in liquid penny-quoted names.
+# PESSIMISTIC = wide-spread reality; paper P&L is always reported as a
+# [pessimistic, base] band because paper fills contain zero slippage
+# information. (Playbook change #3.)
 SLIPPAGE_PCT_OF_PREMIUM: float = 0.05
+SLIPPAGE_PCT_PESSIMISTIC: float = 0.10
+
+# ---------------------------------------------------------------------------
+# Currency — the person eats in EUR (playbook change #12)
+# ---------------------------------------------------------------------------
+# Every virtual close also records the EURUSD rate and PnL in EUR.
+TRACK_EUR: bool = True
 
 # ---------------------------------------------------------------------------
 # Virtual tracker exit rules (mirrors what a disciplined trader would do)

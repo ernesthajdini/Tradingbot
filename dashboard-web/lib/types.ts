@@ -36,6 +36,8 @@ export interface CandidatePayload {
   next_earnings_days: number | null;
   rank: number;
   setup: VirtualSetup | null;
+  tier?: 'live' | 'sandbox';
+  skip_reason?: string;
 }
 
 export interface VirtualSetup {
@@ -58,6 +60,12 @@ export interface VirtualSetup {
   breakeven: number;
   data_quality: string;
   reasoning: string[];
+  structure?: 'csp' | 'put_credit_spread';
+  long_strike?: number | null;
+  tier?: 'live' | 'sandbox';
+  net_credit_after_friction?: number | null;
+  friction_estimate?: number | null;
+  ticket?: string | null;
 }
 
 export interface OpenVirtualTrade {

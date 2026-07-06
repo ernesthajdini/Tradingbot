@@ -225,12 +225,15 @@ def test_close_pnl_is_net_of_friction():
         ticker="TEST", strike=19.0, expiration=s.expiration,
     )
     # gross = 50 - 20 = 30
-    # friction = 2*0.65 + 0.05*(50+20) = 1.30 + 3.50 = 4.80
+    # friction (CSP = 2 legs round trip) = 2*COMMISSION + SLIP*(50+20)
+    expected_friction = (2 * config.COMMISSION_PER_CONTRACT
+                         + config.SLIPPAGE_PCT_OF_PREMIUM * 70.0)
     assert rec["pnl_gross"] == 30.0
-    assert rec["friction"] == pytest.approx(4.80)
-    assert rec["pnl"] == pytest.approx(25.20)
+    assert rec["friction"] == pytest.approx(expected_friction, abs=0.01)
+    assert rec["pnl"] == pytest.approx(30.0 - expected_friction, abs=0.01)
     # pct is computed on NET
-    assert rec["pnl_pct_of_credit"] == pytest.approx(25.20 / 50.0, abs=0.001)
+    assert rec["pnl_pct_of_credit"] == pytest.approx(
+        (30.0 - expected_friction) / 50.0, abs=0.001)
 
 
 def test_iv_blend_prices_put_higher_than_rv_alone():

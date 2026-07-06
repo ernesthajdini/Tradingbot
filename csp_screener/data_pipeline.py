@@ -149,6 +149,50 @@ def recent_realized_vol(df: pd.DataFrame, window: int = 20) -> Optional[float]:
     return float(sigma_daily * np.sqrt(252))
 
 
+def get_eurusd_rate() -> Optional[float]:
+    """Current EURUSD (USD per 1 EUR). For the EUR scoreboard."""
+    try:
+        data = _download_with_retry("EURUSD=X", period="5d")
+        if data is None or data.empty:
+            return None
+        close = data["Close"]
+        if isinstance(close, pd.DataFrame):
+            close = close.iloc[:, 0]
+        close = close.dropna()
+        return float(close.iloc[-1]) if not close.empty else None
+    except Exception as e:
+        logger.debug(f"EURUSD fetch failed: {e}")
+        return None
+
+
+def get_vix_post_spike_window(
+    kill_level: float,
+    recovery_level: float,
+    lookback_days: int,
+) -> bool:
+    """
+    True when VIX exceeded kill_level within the lookback and the latest
+    close is back below recovery_level — the post-spike premium-selling
+    window that is the patient 1-lot trader's one structural edge.
+    """
+    try:
+        data = _download_with_retry("^VIX", period=f"{max(lookback_days + 5, 10)}d")
+        if data is None or data.empty:
+            return False
+        close = data["Close"]
+        if isinstance(close, pd.DataFrame):
+            close = close.iloc[:, 0]
+        close = close.dropna().tail(lookback_days)
+        if close.empty:
+            return False
+        spiked = bool((close > kill_level).any())
+        recovered = bool(close.iloc[-1] < recovery_level)
+        return spiked and recovered
+    except Exception as e:
+        logger.debug(f"VIX spike-window check failed: {e}")
+        return False
+
+
 def get_vix_level() -> Optional[float]:
     """
     Current VIX close from yfinance.

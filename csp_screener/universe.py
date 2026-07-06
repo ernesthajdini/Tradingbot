@@ -137,9 +137,38 @@ seen = set()
 UNIVERSE = [t for t in UNIVERSE if not (t in seen or seen.add(t))]
 
 
-def get_universe() -> list[str]:
-    """Return the canonical universe list."""
+# ---------------------------------------------------------------------------
+# LIVE universe — liquid, penny-quoted, typically $20-60 names.
+# Playbook change #5: this is where real money would go (as put credit
+# spreads). Selection: extreme options liquidity, penny increments, tight
+# spreads. Runtime price filter (LIVE_PRICE_MIN/MAX) handles price drift.
+# ---------------------------------------------------------------------------
+UNIVERSE_LIVE: list[str] = [
+    # Mega-liquid single names commonly in the $20-60 band
+    "SOFI", "PLTR", "INTC", "PFE", "T", "VZ", "F", "BAC", "WFC",
+    "PYPL", "CSCO", "KO", "WMT", "CVS", "UBER", "DAL", "AAL", "UAL",
+    "CCL", "NCLH", "RCL", "DKNG", "HOOD", "AFRM", "RIVN", "SNAP",
+    "PINS", "RBLX", "MU", "GM", "SCHW", "KMI", "WMB", "FCX", "DVN",
+    "AA", "VALE", "MRNA", "OXY", "HAL", "SLB", "USB", "C", "KEY",
+    # Ultra-liquid ETFs in/near the band (penny-quoted, massive OI)
+    "XLF", "XLE", "XLU", "XLP", "GDX", "EEM", "FXI", "EWZ", "TLT",
+    "HYG", "SLV", "IWM",
+]
+seen_live = set()
+UNIVERSE_LIVE = [t for t in UNIVERSE_LIVE if not (t in seen_live or seen_live.add(t))]
+
+
+def get_universe(tier: str = "sandbox") -> list[str]:
+    """Return the universe for a tier: 'live' or 'sandbox'."""
+    if tier == "live":
+        return list(UNIVERSE_LIVE)
     return list(UNIVERSE)
+
+
+def all_tickers() -> list[str]:
+    """Union of both universes (for batch data fetching)."""
+    merged = list(UNIVERSE) + [t for t in UNIVERSE_LIVE if t not in set(UNIVERSE)]
+    return merged
 
 
 def universe_size() -> int:

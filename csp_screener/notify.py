@@ -258,6 +258,47 @@ def render_insights_section(recommendations: list) -> str:
     return "".join(rows)
 
 
+def render_live_section(live_candidates: list[dict], no_trade_week: bool) -> str:
+    """LIVE tier: put credit spreads with staged order tickets."""
+    if no_trade_week or not any(c.get("setup") for c in live_candidates):
+        return (
+            "<div style='padding:16px;background:#ddf4ff;border:1px solid #54aeff;"
+            "border-radius:6px;font-weight:600;'>"
+            "🚫 NO TRADE THIS WEEK — no live-tier spread passed the gates "
+            "(net credit ≥ $25 after friction, friction ≤ 20% of credit, "
+            "live quotes, tight spreads). Sitting out is the designed outcome, "
+            "not a failure.</div>"
+        )
+    blocks = []
+    for c in live_candidates:
+        s = c.get("setup")
+        if not s:
+            reason = c.get("skip_reason", "no viable spread")
+            blocks.append(
+                f"<div style='padding:8px 12px;color:#6e7781;font-size:13px;'>"
+                f"{escape(c['ticker'])}: <i>{escape(reason)}</i></div>"
+            )
+            continue
+        ticket = escape(s.get("ticket") or "")
+        blocks.append(f"""
+        <div style="border:2px solid #2da44e;border-radius:8px;padding:14px;margin:10px 0;">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;">
+            <span style="font-size:16px;font-weight:700;">{escape(c['ticker'])}
+              <span style="font-weight:400;color:#6e7781;font-size:12px;">
+                ${c['last_price']:.2f} · RV pct {c.get('rv_percentile', 0):.0f}
+              </span>
+            </span>
+            {_badge('PUT CREDIT SPREAD', '#2da44e')} {_quality_badge(s.get('data_quality', ''))}
+          </div>
+          <pre style="background:#f6f8fa;border-radius:6px;padding:10px;margin:10px 0 4px;
+                      font-size:12px;line-height:1.6;overflow-x:auto;">{ticket}</pre>
+          <div style="font-size:11px;color:#6e7781;">
+            Approve or reject — never modify by hand. A typed order is a tripwire event.
+          </div>
+        </div>""")
+    return "".join(blocks)
+
+
 def render_full_email(
     week_label: str,
     candidates: list[dict],
@@ -265,9 +306,17 @@ def render_full_email(
     open_positions: list[dict],
     health: dict,
     recommendations: list | None = None,
+    live_candidates: list[dict] | None = None,
+    flags: dict | None = None,
 ) -> tuple[str, str]:
-    """Return (subject, html_body)."""
-    subject = f"[CSP Screener] {week_label} — {len(candidates)} candidates"
+    """Return (subject, html_body). Two-tier layout: LIVE on top, sandbox below."""
+    flags = flags or {}
+    live_candidates = live_candidates or []
+    n_live = sum(1 for c in live_candidates if c.get("setup"))
+    if flags.get("no_trade_week"):
+        subject = f"[CSP Screener] {week_label} — NO TRADE (sandbox: {len(candidates)})"
+    else:
+        subject = f"[CSP Screener] {week_label} — {n_live} live ticket(s), {len(candidates)} sandbox"
 
     health_html = ""
     if health.get("warnings"):
@@ -278,6 +327,32 @@ def render_full_email(
             f"<b>System notes:</b><br>{warns}</div>"
         )
 
+    # Regime banners
+    banners = ""
+    if flags.get("post_spike_window"):
+        banners += (
+            "<div style='padding:12px;margin:12px 0;background:#dafbe1;"
+            "border:2px solid #2da44e;border-radius:6px;font-weight:600;'>"
+            "⚡ POST-SPIKE WINDOW: VIX spiked above the kill switch and has "
+            "recovered — historically the richest premium-selling regime. "
+            "The pre-staged vol-spike playbook applies.</div>"
+        )
+    fomc_days = flags.get("fomc_days")
+    if fomc_days is not None and fomc_days <= 5:
+        banners += (
+            f"<div style='padding:12px;margin:12px 0;background:#fff8c5;"
+            f"border:1px solid #d4a72c;border-radius:6px;'>"
+            f"🏦 FOMC decision in {fomc_days} day(s). Paper-only condor module "
+            f"applies; no new live entries the day before/after.</div>"
+        )
+    if flags.get("eur_usd"):
+        banners += (
+            f"<div style='padding:8px 12px;margin:8px 0;font-size:12px;color:#6e7781;'>"
+            f"EURUSD {flags['eur_usd']:.4f} — P&amp;L tracked in both currencies; "
+            f"the scoreboard that matters is EUR.</div>"
+        )
+
+    live_html = render_live_section(live_candidates, flags.get("no_trade_week", False))
     candidates_html = render_candidates_section(candidates)
     perf_html = render_performance_section(summaries)
     open_html = render_open_positions_section(open_positions)
@@ -306,9 +381,20 @@ def render_full_email(
       </p>
 
       {health_html}
+      {banners}
+
+      <h2 style="margin-top:30px;font-size:18px;border-bottom:2px solid #2da44e;padding-bottom:6px;">
+        LIVE tier — put credit spreads (staged tickets)
+      </h2>
+      {live_html}
+      <p style="font-size:12px;color:#6e7781;margin-top:8px;">
+        $20-60 liquid names, defined risk, gates: net credit ≥ $25 after friction,
+        friction ≤ 20% of credit, live quotes only. The machine stages; you only
+        approve or reject in IBKR.
+      </p>
 
       <h2 style="margin-top:30px;font-size:18px;border-bottom:2px solid #d0d7de;padding-bottom:6px;">
-        This week's candidates
+        Sandbox tier — CSP research signals (paper-only)
       </h2>
       {candidates_html}
       <p style="font-size:12px;color:#6e7781;margin-top:8px;">

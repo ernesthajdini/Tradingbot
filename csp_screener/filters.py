@@ -24,6 +24,10 @@ class TickerContext:
     next_earnings: Optional[datetime] = None
     excluded: bool = False
     price_history: Optional[pd.Series] = None  # for ranker, not filters
+    # Tier-specific price band; defaults = sandbox band. Live tier sets
+    # LIVE_PRICE_MIN/MAX when building contexts.
+    price_min: float = config.PRICE_MIN
+    price_max: float = config.PRICE_MAX
 
     def __post_init__(self):
         # Normalize earnings to datetime if it's a date or string
@@ -41,13 +45,13 @@ class FilterResult:
 
 
 def filter_price(ctx: TickerContext) -> FilterResult:
-    """Reject if price outside [PRICE_MIN, PRICE_MAX]."""
+    """Reject if price outside the context's tier band."""
     if ctx.last_price is None or pd.isna(ctx.last_price):
         return FilterResult(False, "no price data")
-    if ctx.last_price < config.PRICE_MIN:
-        return FilterResult(False, f"price ${ctx.last_price:.2f} < ${config.PRICE_MIN}")
-    if ctx.last_price > config.PRICE_MAX:
-        return FilterResult(False, f"price ${ctx.last_price:.2f} > ${config.PRICE_MAX}")
+    if ctx.last_price < ctx.price_min:
+        return FilterResult(False, f"price ${ctx.last_price:.2f} < ${ctx.price_min}")
+    if ctx.last_price > ctx.price_max:
+        return FilterResult(False, f"price ${ctx.last_price:.2f} > ${ctx.price_max}")
     return FilterResult(True, "")
 
 

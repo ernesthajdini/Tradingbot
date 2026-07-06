@@ -67,9 +67,13 @@ def open_virtual_position(setup: VirtualSetup, screen_id: str) -> str:
         "delta_at_open": setup.delta,
         "iv_at_open": setup.iv,
         "data_quality": setup.data_quality,
+        # Two-tier extensions
+        "structure": getattr(setup, "structure", "csp"),
+        "long_strike": getattr(setup, "long_strike", None),
+        "tier": getattr(setup, "tier", "sandbox"),
     }
     journal.append("virtual_trades", record)
-    logger.info(f"Virtual position opened: {trade_id}")
+    logger.info(f"Virtual position opened [{record['tier']}/{record['structure']}]: {trade_id}")
     return trade_id
 
 
@@ -83,6 +87,10 @@ def close_virtual_position(
     ticker: Optional[str] = None,
     strike: Optional[float] = None,
     expiration: Optional[str] = None,
+    structure: str = "csp",
+    tier: str = "sandbox",
+    long_strike: Optional[float] = None,
+    eur_usd_rate: Optional[float] = None,
 ) -> dict:
     """
     Log a CLOSE event. PnL = credit - final_put_price (per contract).
@@ -103,21 +111,33 @@ def close_virtual_position(
             expiration = expiration or parts[3]
 
     # Gross PnL is the frictionless mark. Net PnL subtracts realistic
-    # friction: commission both ways + slippage both ways (a % of the
-    # premium at entry and at exit). "pnl" is NET everywhere downstream —
-    # the whole point of the virtual record is honesty about expectancy.
+    # friction. "pnl" is NET at BASE slippage everywhere downstream;
+    # "pnl_pessimistic" is the wide-spread bound — paper fills contain no
+    # slippage information, so honest reporting is a band, not a point.
     pnl_gross = credit_received - final_put_price
-    friction = (
-        2 * config.COMMISSION_PER_CONTRACT
-        + config.SLIPPAGE_PCT_OF_PREMIUM * (credit_received + final_put_price)
-    )
+    # Contracts crossing the tape round-trip: CSP = 2, spread = 4.
+    legs_round_trip = 4 if structure == "put_credit_spread" else 2
+    commissions = legs_round_trip * config.COMMISSION_PER_CONTRACT
+    slip_base = config.SLIPPAGE_PCT_OF_PREMIUM * (credit_received + final_put_price)
+    slip_pess = config.SLIPPAGE_PCT_PESSIMISTIC * (credit_received + final_put_price)
+    friction = commissions + slip_base
+    friction_pessimistic = commissions + slip_pess
     pnl = pnl_gross - friction
+    pnl_pessimistic = pnl_gross - friction_pessimistic
+
+    pnl_eur = None
+    if eur_usd_rate and eur_usd_rate > 0:
+        pnl_eur = round(pnl / eur_usd_rate, 2)
+
     record = {
         "event": "close",
         "trade_id": trade_id,
         "ticker": ticker,
         "strike": strike,
         "expiration": expiration,
+        "structure": structure,
+        "tier": tier,
+        "long_strike": long_strike,
         "closed_at": datetime.now().isoformat(),
         "exit_reason": exit_reason,
         "exit_spot": round(exit_spot, 4),
@@ -126,6 +146,9 @@ def close_virtual_position(
         "pnl_gross": round(pnl_gross, 2),
         "friction": round(friction, 2),
         "pnl": round(pnl, 2),
+        "pnl_pessimistic": round(pnl_pessimistic, 2),
+        "eur_usd_rate": eur_usd_rate,
+        "pnl_eur": pnl_eur,
         "pnl_pct_of_credit": round(pnl / credit_received, 4) if credit_received else 0.0,
         "notes": notes,
     }
@@ -152,6 +175,9 @@ class OpenVirtualTrade:
     max_loss: float
     breakeven: float
     iv_at_open: Optional[float]
+    structure: str = "csp"
+    long_strike: Optional[float] = None
+    tier: str = "sandbox"
 
 
 def get_open_virtual_trades() -> list[OpenVirtualTrade]:
@@ -187,6 +213,10 @@ def get_open_virtual_trades() -> list[OpenVirtualTrade]:
                 max_loss=float(ev["max_loss"]),
                 breakeven=float(ev["breakeven"]),
                 iv_at_open=ev.get("iv_at_open"),
+                structure=ev.get("structure", "csp"),
+                long_strike=(float(ev["long_strike"])
+                             if ev.get("long_strike") is not None else None),
+                tier=ev.get("tier", "sandbox"),
             ))
         except Exception as e:
             logger.warning(f"Skipping malformed open event {tid}: {e}")
@@ -277,6 +307,17 @@ def evaluate_open_position(
         days_to_expiry=dte_remaining,
         sigma=sigma,
     )
+    # Put credit spread: position value = short put - long put (both re-priced)
+    if trade.structure == "put_credit_spread" and trade.long_strike:
+        long_price_per_share = black_scholes_put_price(
+            spot=current_spot,
+            strike=trade.long_strike,
+            days_to_expiry=dte_remaining,
+            sigma=sigma,
+        )
+        current_put_price_per_share = max(
+            0.0, current_put_price_per_share - long_price_per_share
+        )
     current_put_price = current_put_price_per_share * 100.0
 
     pnl = trade.credit_received - current_put_price
@@ -316,6 +357,7 @@ def update_all_open_positions(
     spot_resolver,
     iv_resolver,
     today: Optional[datetime] = None,
+    eur_usd_rate: Optional[float] = None,
 ) -> dict:
     """
     Loop through every open virtual trade, re-price, close if exit triggers.
@@ -358,6 +400,10 @@ def update_all_open_positions(
                     ticker=trade.ticker,
                     strike=trade.strike,
                     expiration=trade.expiration.date().isoformat(),
+                    structure=trade.structure,
+                    tier=trade.tier,
+                    long_strike=trade.long_strike,
+                    eur_usd_rate=eur_usd_rate,
                 )
                 summary["closed"] += 1
                 summary["closed_pnl_total"] += close_record["pnl"]

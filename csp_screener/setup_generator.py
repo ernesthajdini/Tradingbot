@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, asdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from csp_screener import config
@@ -32,7 +32,7 @@ class VirtualSetup:
     spot_at_screen: float
     expiration: str          # ISO date
     dte: int
-    strike: float
+    strike: float            # short put strike
     pct_otm: float           # how far OTM as fraction of spot
     delta: Optional[float]
     iv: Optional[float]
@@ -42,11 +42,18 @@ class VirtualSetup:
     bid_ask_pct: float
     open_interest: int
     volume: int
-    estimated_credit_per_contract: float  # premium received per contract (100 shares)
-    max_loss_per_contract: float          # strike * 100 - credit (assignment risk)
-    breakeven: float                      # strike - credit_per_share
-    data_quality: str                     # "ibkr_greeks" / "yfinance_iv" / "estimated"
+    estimated_credit_per_contract: float  # net premium received per contract
+    max_loss_per_contract: float          # CSP: strike*100-credit; spread: width*100-credit
+    breakeven: float
+    data_quality: str
     reasoning: list[str]
+    # Two-tier extensions (playbook). Defaults keep old CSP records valid.
+    structure: str = "csp"                # "csp" | "put_credit_spread"
+    long_strike: Optional[float] = None   # spread only
+    tier: str = "sandbox"                 # "live" | "sandbox"
+    net_credit_after_friction: Optional[float] = None
+    friction_estimate: Optional[float] = None
+    ticket: Optional[str] = None          # staged order text (live tier)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -212,4 +219,164 @@ def generate_setup(
         breakeven=round(breakeven, 2),
         data_quality=quality,
         reasoning=reasoning,
+        structure="csp",
+        tier="sandbox",
     )
+
+
+# ---------------------------------------------------------------------------
+# LIVE tier: put credit spreads with staged tickets (playbook changes #1,5,7)
+# ---------------------------------------------------------------------------
+
+def generate_spread_setup(
+    ticker: str,
+    spot: float,
+    chain: Optional[OptionsChain],
+    target_delta: float = config.TARGET_DELTA,
+) -> Optional[VirtualSetup]:
+    """
+    Build a PUT CREDIT SPREAD setup for a live-tier candidate:
+      - short put near target delta (25-30Δ) with LIVE quotes only
+      - long put 1-2 dollars lower (defined risk)
+      - hard viability gates: net credit after friction >= $25,
+        friction <= 20% of credit, max risk <= MAX_RISK_PER_SPREAD
+      - staged order ticket attached (the human only approves)
+
+    Returns None if no viable spread exists — 'no trade' is a first-class
+    outcome for the live tier.
+    """
+    if chain is None or not chain.expirations:
+        return None
+
+    today = datetime.now().date()
+    target_dte = (config.DTE_MIN + config.DTE_MAX) // 2
+    expirations_sorted = sorted(
+        chain.expirations,
+        key=lambda e: abs((e.date() - today).days - target_dte),
+    )
+
+    for exp in expirations_sorted:
+        puts = chain.puts_for_expiration(exp)
+        # LIVE tier demands live two-sided quotes — no stale-quote
+        # degradation here. That leniency is sandbox-only.
+        live_quoted = [p for p in puts if p.bid > 0 and p.ask > 0 and p.mid > 0]
+
+        # SHORT leg gate: % of mid (this is where the premium lives)
+        short_candidates = [
+            p for p in live_quoted
+            if p.bid_ask_spread_pct <= config.MAX_BID_ASK_PCT_OF_MID
+        ]
+        # LONG leg gate: cheap wings always look wide in % terms — what
+        # costs you is absolute cents. Allow <= $0.05 or <= 10% of mid.
+        long_candidates = [
+            p for p in live_quoted
+            if (p.ask - p.bid) <= max(0.05, 0.10 * p.mid)
+        ]
+        if not short_candidates or len(long_candidates) < 1:
+            continue
+
+        # Short leg: closest to target delta, else ~5% OTM
+        with_delta = [p for p in short_candidates if p.delta is not None]
+        if with_delta:
+            short_leg = min(with_delta, key=lambda p: abs(abs(p.delta) - target_delta))
+        else:
+            short_leg = min(short_candidates, key=lambda p: abs(p.strike - spot * 0.95))
+        if short_leg.strike >= spot:  # never sell ITM puts
+            continue
+
+        # Long leg: try the tier-preferred width first, then the other —
+        # the friction gates are tight enough that only one width may pass.
+        lower = [p for p in long_candidates if p.strike < short_leg.strike]
+        if not lower:
+            continue
+        preferred = (config.SPREAD_WIDTH_NARROW if spot <= 30
+                     else config.SPREAD_WIDTH_WIDE)
+        widths_to_try = [preferred] + [
+            w for w in (config.SPREAD_WIDTH_NARROW, config.SPREAD_WIDTH_WIDE)
+            if w != preferred
+        ]
+
+        long_leg = None
+        width = credit = max_loss = friction = net_after_friction = None
+        net_credit_share = None
+        for width_target in widths_to_try:
+            cand = min(lower, key=lambda p: abs((short_leg.strike - p.strike) - width_target))
+            w = short_leg.strike - cand.strike
+            if w <= 0 or w > config.SPREAD_WIDTH_WIDE * 1.5:
+                continue
+            ncs = short_leg.mid - cand.mid
+            if ncs <= 0:
+                continue
+            cr = ncs * 100.0
+            ml = w * 100.0 - cr
+            if ml > config.MAX_RISK_PER_SPREAD:
+                continue
+            # Friction: 2 legs open + 2 legs close = 4 contracts of commission,
+            # plus slippage on the credit both ways.
+            fr = 4 * config.COMMISSION_PER_CONTRACT + \
+                2 * config.SLIPPAGE_PCT_OF_PREMIUM * cr
+            naf = cr - fr
+            # Viability gates (playbook change #7)
+            if naf < config.MIN_NET_CREDIT_AFTER_FRICTION:
+                continue
+            if fr > config.MAX_FRICTION_PCT_OF_CREDIT * cr:
+                continue
+            long_leg, width, net_credit_share = cand, w, ncs
+            credit, max_loss, friction, net_after_friction = cr, ml, fr, naf
+            break
+
+        if long_leg is None:
+            continue
+
+        breakeven = short_leg.strike - net_credit_share
+        exp_str = exp.strftime("%d%b%y").upper()
+        tp_price = round(net_credit_share * (1 - config.VIRTUAL_TP_PCT), 2)
+        close_by = (exp.date() - timedelta(days=config.VIRTUAL_FORCE_EXIT_DTE)).isoformat()
+
+        ticket = (
+            f"SELL -1 {ticker} {exp_str} {short_leg.strike:g}P / "
+            f"BUY +1 {ticker} {exp_str} {long_leg.strike:g}P\n"
+            f"LMT @ {net_credit_share:.2f} credit (mid) DAY | "
+            f"GTC buyback @ {tp_price:.2f} (50% TP) | "
+            f"close by {close_by} (21 DTE)\n"
+            f"Max risk ${max_loss:.0f} | Net credit after friction ~${net_after_friction:.0f}"
+        )
+
+        quality = ("ibkr_greeks" if (short_leg.source == "ibkr" and short_leg.delta is not None)
+                   else "yfinance_iv_estimated_delta" if short_leg.iv is not None
+                   else "premium_only_no_greeks")
+
+        return VirtualSetup(
+            ticker=ticker,
+            spot_at_screen=round(spot, 2),
+            expiration=exp.date().isoformat(),
+            dte=short_leg.dte,
+            strike=short_leg.strike,
+            pct_otm=round((spot - short_leg.strike) / spot, 4),
+            delta=short_leg.delta,
+            iv=short_leg.iv,
+            bid=round(short_leg.bid, 4),
+            ask=round(short_leg.ask, 4),
+            mid=round(net_credit_share, 4),  # mid = NET spread credit per share
+            bid_ask_pct=round(short_leg.bid_ask_spread_pct, 4),
+            open_interest=short_leg.open_interest,
+            volume=short_leg.volume,
+            estimated_credit_per_contract=round(credit, 2),
+            max_loss_per_contract=round(max_loss, 2),
+            breakeven=round(breakeven, 2),
+            data_quality=quality,
+            reasoning=[
+                f"Put credit spread {short_leg.strike:g}/{long_leg.strike:g}, "
+                f"width ${width:g}, DTE {short_leg.dte}",
+                f"Credit ${credit:.2f}, friction ~${friction:.2f}, "
+                f"net ${net_after_friction:.2f}, max risk ${max_loss:.0f}",
+            ],
+            structure="put_credit_spread",
+            long_strike=long_leg.strike,
+            tier="live",
+            net_credit_after_friction=round(net_after_friction, 2),
+            friction_estimate=round(friction, 2),
+            ticket=ticket,
+        )
+
+    return None

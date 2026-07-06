@@ -82,6 +82,11 @@ def push_screen(record: dict) -> bool:
             "candidates_payload": record.get("candidates_payload"),
             "summaries_payload": record.get("summaries"),
             "recommendations_payload": record.get("recommendations"),
+            "live_viable": record.get("live_viable"),
+            "no_trade_week": record.get("no_trade_week"),
+            "post_spike_window": record.get("post_spike_window"),
+            "fomc_days": record.get("fomc_days"),
+            "eur_usd_rate": record.get("eur_usd_rate"),
             "record_hash": record.get("record_hash"),
             "recorded_at": record.get("recorded_at"),
         }
@@ -126,6 +131,12 @@ def push_virtual_trade(record: dict) -> bool:
             "pnl": record.get("pnl"),
             "pnl_gross": record.get("pnl_gross"),
             "friction": record.get("friction"),
+            "pnl_pessimistic": record.get("pnl_pessimistic"),
+            "eur_usd_rate": record.get("eur_usd_rate"),
+            "pnl_eur": record.get("pnl_eur"),
+            "structure": record.get("structure"),
+            "tier": record.get("tier"),
+            "long_strike": record.get("long_strike"),
             "pnl_pct_of_credit": record.get("pnl_pct_of_credit"),
             "notes": record.get("notes"),
             "record_hash": record.get("record_hash"),
@@ -196,7 +207,8 @@ def push(topic: str, record: dict) -> bool:
 _HYDRATE_FIELDS_FLOAT = (
     "strike", "spot_at_open", "credit_received", "max_loss", "breakeven",
     "delta_at_open", "iv_at_open", "exit_spot", "final_put_price",
-    "pnl", "pnl_gross", "friction", "pnl_pct_of_credit",
+    "pnl", "pnl_gross", "friction", "pnl_pessimistic", "eur_usd_rate",
+    "pnl_eur", "long_strike", "pnl_pct_of_credit",
 )
 _HYDRATE_FIELDS_TS = ("opened_at", "closed_at", "recorded_at")
 
@@ -218,6 +230,7 @@ def _row_to_journal_record(row: dict) -> dict:
     for k in (
         "event", "trade_id", "screen_id", "ticker", "expiration",
         "dte_at_open", "data_quality", "exit_reason", "notes", "record_hash",
+        "structure", "tier",
     ):
         if row.get(k) is not None:
             rec[k] = row[k]

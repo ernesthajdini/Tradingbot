@@ -82,7 +82,9 @@ def run() -> int:
                 return None
             return data_pipeline.recent_realized_vol(df, window=30) or 0.30
 
-        summary = virtual_tracker.update_all_open_positions(spot_resolver, iv_resolver)
+        eur_usd = data_pipeline.get_eurusd_rate() if config.TRACK_EUR else None
+        summary = virtual_tracker.update_all_open_positions(
+            spot_resolver, iv_resolver, eur_usd_rate=eur_usd)
         logger.info(
             f"Daily update: {summary['updated']} marked, "
             f"{summary['closed']} closed (PnL ${summary['closed_pnl_total']:+.2f})"
