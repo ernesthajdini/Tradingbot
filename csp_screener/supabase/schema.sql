@@ -160,7 +160,11 @@ END$$;
 -- VIEW: open_virtual_trades — replay event log to get currently-open trades
 -- ---------------------------------------------------------------------------
 -- The dashboard queries this view instead of doing the replay client-side.
-CREATE OR REPLACE VIEW public.open_virtual_trades AS
+-- NOTE: views are DROPPED and recreated (CREATE OR REPLACE cannot change a
+-- view's column list), and security_invoker is re-applied immediately after
+-- so re-running this file never silently reopens public data access.
+DROP VIEW IF EXISTS public.open_virtual_trades;
+CREATE VIEW public.open_virtual_trades AS
 SELECT o.*
 FROM public.virtual_trades o
 WHERE o.event = 'open'
@@ -170,10 +174,14 @@ WHERE o.event = 'open'
   );
 
 
+ALTER VIEW public.open_virtual_trades SET (security_invoker = true);
+
+
 -- ---------------------------------------------------------------------------
 -- VIEW: closed_virtual_trades — joined open+close for analytics
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE VIEW public.closed_virtual_trades AS
+DROP VIEW IF EXISTS public.closed_virtual_trades;
+CREATE VIEW public.closed_virtual_trades AS
 SELECT
     c.trade_id,
     c.ticker,
@@ -207,6 +215,8 @@ SELECT
 FROM public.virtual_trades o
 JOIN public.virtual_trades c USING (trade_id)
 WHERE o.event = 'open' AND c.event = 'close';
+
+ALTER VIEW public.closed_virtual_trades SET (security_invoker = true);
 
 
 -- ---------------------------------------------------------------------------
