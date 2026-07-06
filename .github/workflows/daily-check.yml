@@ -2,7 +2,11 @@ name: CSP Screener — daily virtual position update
 
 on:
   schedule:
-    # 21:30 UTC Mon-Fri ≈ 16:30 ET (after market close)
+    # Hourly during US market hours, Mon-Fri:
+    # 14:35–20:35 UTC ≈ 10:35 ET through 16:35 ET (covers open to close).
+    # Public repo = free unlimited Actions minutes, so hourly costs nothing.
+    - cron: '35 14-20 * * 1-5'
+    # Final end-of-day pass after close
     - cron: '30 21 * * 1-5'
   workflow_dispatch:
 

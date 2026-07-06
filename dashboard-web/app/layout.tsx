@@ -1,6 +1,7 @@
 import './globals.css';
 import type { Metadata } from 'next';
 import { Nav } from './components/nav';
+import { RealtimeRefresher } from './components/realtime-refresher';
 
 export const metadata: Metadata = {
   title: 'CSP Screener',
@@ -12,6 +13,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body className="min-h-screen bg-bg text-text font-sans">
         <Nav />
+        <RealtimeRefresher />
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
           {children}
         </main>
