@@ -299,6 +299,54 @@ def render_live_section(live_candidates: list[dict], no_trade_week: bool) -> str
     return "".join(blocks)
 
 
+def render_bottom_line(flags: dict) -> str:
+    """
+    One box at the very top that answers 'what do I need to know / do?'
+    before any table. Everything below it is supporting detail.
+    """
+    n_live = flags.get("live_viable_count", 0)
+    opened = flags.get("opened_count", 0)
+    closed = flags.get("closed_count", 0)
+    closed_pnl = flags.get("closed_pnl", 0.0)
+    n_open = flags.get("open_positions_count", 0)
+
+    if flags.get("no_trade_week"):
+        headline = "🚫 Nothing to do this week — no real-money trade qualified."
+        sub = ("No spread passed the safety gates. That's the system working, "
+               "not failing. Skim the paper section if curious; otherwise close this email.")
+        bg, border = "#ddf4ff", "#54aeff"
+    else:
+        headline = f"✅ {n_live} staged ticket(s) waiting for your approve/reject in IBKR."
+        sub = ("Review the green boxes below. Approve or reject only — "
+               "never modify by hand.")
+        bg, border = "#dafbe1", "#2da44e"
+
+    activity = (
+        f"Paper activity this run: {opened} opened, {closed} closed"
+        + (f" (${closed_pnl:+.2f})" if closed else "")
+        + f" · {n_open} position(s) currently open."
+    )
+    return f"""
+    <div style="padding:16px;margin:16px 0;background:{bg};border:2px solid {border};
+                border-radius:8px;">
+      <div style="font-size:16px;font-weight:700;">{headline}</div>
+      <div style="font-size:13px;color:#57606a;margin-top:6px;">{sub}</div>
+      <div style="font-size:12px;color:#6e7781;margin-top:8px;">{activity}</div>
+    </div>"""
+
+
+def render_quality_legend() -> str:
+    """Plain-English key for the data-quality badges."""
+    return f"""
+    <div style="font-size:11px;color:#6e7781;margin-top:8px;line-height:1.8;">
+      <b>Data badges:</b>
+      {_badge('IBKR LIVE', '#2da44e')} live broker quotes (trustworthy) ·
+      {_badge('yfinance + est', '#bf8700')} free delayed data, Greeks estimated (directional only) ·
+      {_badge('PREMIUM ONLY', '#cf222e')} price known but no Greeks ·
+      {_badge('LIQ?', '#cf222e')} liquidity NOT verified — always check the chain in IBKR first.
+    </div>"""
+
+
 def render_full_email(
     week_label: str,
     candidates: list[dict],
@@ -370,6 +418,9 @@ def render_full_email(
         respect the 14-day cooldown if changing thresholds.
       </p>"""
 
+    bottom_line = render_bottom_line(flags)
+    legend_html = render_quality_legend()
+
     html_body = f"""
     <html><body style="font-family:sans-serif;max-width:900px;margin:auto;color:#1f2328;
                        background:#fff;padding:20px;">
@@ -380,52 +431,56 @@ def render_full_email(
         You pick the actual contract.
       </p>
 
+      {bottom_line}
       {health_html}
       {banners}
 
       <h2 style="margin-top:30px;font-size:18px;border-bottom:2px solid #2da44e;padding-bottom:6px;">
-        LIVE tier — put credit spreads (staged tickets)
+        1 · Real-money candidates (staged tickets)
       </h2>
+      <p style="font-size:12px;color:#6e7781;margin:8px 0;">
+        Liquid $20-60 names as defined-risk put credit spreads. Only shown when
+        every gate passed: net credit ≥ $25 after friction, friction ≤ 20% of
+        credit, live quotes, tight spreads. The machine stages the ticket —
+        your only move is approve or reject in IBKR.
+      </p>
       {live_html}
-      <p style="font-size:12px;color:#6e7781;margin-top:8px;">
-        $20-60 liquid names, defined risk, gates: net credit ≥ $25 after friction,
-        friction ≤ 20% of credit, live quotes only. The machine stages; you only
-        approve or reject in IBKR.
-      </p>
 
       <h2 style="margin-top:30px;font-size:18px;border-bottom:2px solid #d0d7de;padding-bottom:6px;">
-        Sandbox tier — CSP research signals (paper-only)
+        2 · Paper-only research (no real money)
       </h2>
+      <p style="font-size:12px;color:#6e7781;margin:8px 0;">
+        The $5-25 research universe. These open as virtual positions to build the
+        track record — they are NOT trade suggestions. If one ever tempts you:
+        verify IV rank on <a href="https://www.barchart.com" style="color:#0969da;">barchart.com</a>,
+        check the chain in IBKR, write the exit plan first (50% TP / 21 DTE / -2x credit SL).
+      </p>
       {candidates_html}
-      <p style="font-size:12px;color:#6e7781;margin-top:8px;">
-        Before placing a real trade: verify IV rank on
-        <a href="https://www.barchart.com" style="color:#0969da;">barchart.com</a>,
-        check chain in IBKR, set a hard exit plan (50% TP / 21 DTE / -2x credit SL).
-        Read once, decide once, then journal the decision.
-      </p>
+      {legend_html}
 
       <h2 style="margin-top:30px;font-size:18px;border-bottom:2px solid #d0d7de;padding-bottom:6px;">
-        Screener track record (virtual)
+        3 · How the screener is doing (paper record)
       </h2>
-      {perf_html}
-      <p style="font-size:12px;color:#6e7781;margin-top:8px;">
-        Virtual = "what would have happened if you'd taken every weekly suggestion."
-        P&amp;L is NET of ${config.COMMISSION_PER_CONTRACT:.2f}/contract commission each way
-        plus {config.SLIPPAGE_PCT_OF_PREMIUM:.0%} slippage on entry and exit premium.
-        PF &gt; 1.0 = positive expectancy after friction.
+      <p style="font-size:12px;color:#6e7781;margin:8px 0;">
+        "What if I had taken every suggestion?" — P&amp;L shown NET of
+        ${config.COMMISSION_PER_CONTRACT:.2f}/contract commission each way plus
+        {config.SLIPPAGE_PCT_OF_PREMIUM:.0%} slippage each way. Profit factor
+        above 1.0 = making money after friction. Under ~30 closed trades this
+        is noise, not signal.
       </p>
+      {perf_html}
 
       {insights_section}
 
       <h2 style="margin-top:30px;font-size:18px;border-bottom:2px solid #d0d7de;padding-bottom:6px;">
-        Open virtual positions
+        4 · Open paper positions
       </h2>
       {open_html}
 
       <hr style="margin-top:30px;border:none;border-top:1px solid #d0d7de;">
       <p style="font-size:11px;color:#6e7781;">
-        Sent by csp_screener (local cron, your Windows machine).
-        Hard rules locked in config.py. Edit deliberately.
+        Weekly digest from csp_screener. Daily indications live on the dashboard's
+        Daily tab. Hard rules locked in config.py — edit deliberately.
       </p>
     </body></html>
     """

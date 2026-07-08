@@ -220,15 +220,21 @@ def step_open_virtual_positions(candidates: list[dict], screen_id: str) -> list[
 
     Idempotency is enforced by CONTRACT, not by screen_id: if a virtual
     position for the same (ticker, strike, expiration) is already open —
-    from a re-run today or from last week's screen — we skip it. Also
+    from a re-run today or from last week's screen — we skip it. One open
+    position per TICKER: with daily runs feeding the paper pool, the same
+    name resurfaces day after day at drifting strikes, and stacking
+    near-identical positions would fill the pool with correlated duplicates
+    instead of the diverse 200+ trades the playbook gate needs. Also
     enforces the MAX_VIRTUAL_OPEN portfolio cap.
     """
     from csp_screener.setup_generator import VirtualSetup
 
+    open_trades = virtual_tracker.get_open_virtual_trades()
     already_open = {
         (t.ticker, round(float(t.strike), 4), t.expiration.date().isoformat())
-        for t in virtual_tracker.get_open_virtual_trades()
+        for t in open_trades
     }
+    open_tickers = {t.ticker for t in open_trades}
     open_count = len(already_open)
 
     opened = []
@@ -244,6 +250,12 @@ def step_open_virtual_positions(candidates: list[dict], screen_id: str) -> list[
         if key in already_open:
             logger.info(f"Skipping duplicate virtual open: {key}")
             continue
+        if setup_dict["ticker"] in open_tickers:
+            logger.info(
+                f"Skipping {setup_dict['ticker']}: ticker already has an "
+                f"open virtual position"
+            )
+            continue
         if open_count + len(opened) >= config.MAX_VIRTUAL_OPEN:
             logger.warning(
                 f"MAX_VIRTUAL_OPEN ({config.MAX_VIRTUAL_OPEN}) reached — "
@@ -254,6 +266,7 @@ def step_open_virtual_positions(candidates: list[dict], screen_id: str) -> list[
         trade_id = virtual_tracker.open_virtual_position(setup, screen_id)
         opened.append(trade_id)
         already_open.add(key)
+        open_tickers.add(setup_dict["ticker"])
     return opened
 
 
@@ -328,15 +341,27 @@ def assemble_health(
 # Main
 # ---------------------------------------------------------------------------
 
-def run_weekly_screen(force_send: bool = False, use_ibkr: bool = True) -> int:
-    """Returns exit code (0 OK, 1 failure)."""
+def run_weekly_screen(
+    force_send: bool = False,
+    use_ibkr: bool = True,
+    run_type: str = "weekly",
+) -> int:
+    """
+    Full screen pipeline. run_type='weekly' is the Sunday run (sends the
+    email digest); run_type='daily' is the weekday indications run — same
+    pipeline, same virtual opens (feeds the paper pool toward the playbook's
+    200+ trade gate), but NO email: the dashboard's Daily tab is the surface.
+    Returns exit code (0 OK, 1 failure).
+    """
+    is_daily = run_type == "daily"
     _setup_logging()
     deadman.ping_start()
     now = datetime.now()
-    screen_id = f"screen_{now.strftime('%Y-%m-%d')}_{uuid.uuid4().hex[:6]}"
+    prefix = "daily" if is_daily else "screen"
+    screen_id = f"{prefix}_{now.strftime('%Y-%m-%d')}_{uuid.uuid4().hex[:6]}"
 
     logger.info("=" * 50)
-    logger.info(f"CSP Screener run starting (screen_id={screen_id})")
+    logger.info(f"CSP Screener {run_type} run starting (screen_id={screen_id})")
 
     try:
         # -1. Hydrate local journal from Supabase. CRITICAL on GitHub Actions:
@@ -376,10 +401,11 @@ def run_weekly_screen(force_send: bool = False, use_ibkr: bool = True) -> int:
         from csp_screener import fomc
         fomc_days = fomc.days_to_fomc()
 
-        # 0b. VIX kill switch
+        # 0b. VIX kill switch (daily runs skip the email — weekly already sent it)
         if vix is not None and vix > config.VIX_KILL_SWITCH:
             logger.warning(f"VIX {vix:.1f} > kill switch {config.VIX_KILL_SWITCH}")
-            kill_email(now, vix)
+            if not is_daily:
+                kill_email(now, vix)
             deadman.ping_success(f"VIX kill switch triggered: {vix:.1f}")
             return 0
 
@@ -459,32 +485,42 @@ def run_weekly_screen(force_send: bool = False, use_ibkr: bool = True) -> int:
         # 8. Assemble health
         health = assemble_health(vix, earnings_data, len(ranked), earnings_canary)
 
-        # 9. Render + send email (two-tier layout)
-        week_label = now.strftime("Week of %Y-%m-%d")
-        flags = {
-            "no_trade_week": no_trade_week,
-            "post_spike_window": post_spike,
-            "fomc_days": fomc_days,
-            "eur_usd": eur_usd,
-        }
-        subject, html = notify.render_full_email(
-            week_label=week_label,
-            candidates=sandbox_candidates,
-            summaries=summaries,
-            open_positions=open_positions,
-            health=health,
-            recommendations=recommendations,
-            live_candidates=live_candidates,
-            flags=flags,
-        )
-        preview_path = notify.write_preview(subject, html)
-        sent = notify.send_email(subject, html)
-        if not sent:
-            logger.warning(f"Email not sent (SMTP creds missing?). Preview at {preview_path}")
+        # 9. Render + send email (two-tier layout). Daily runs skip email
+        # entirely — the dashboard's Daily tab is their surface.
+        sent = False
+        preview_path = None
+        if not is_daily:
+            week_label = now.strftime("Week of %Y-%m-%d")
+            flags = {
+                "no_trade_week": no_trade_week,
+                "post_spike_window": post_spike,
+                "fomc_days": fomc_days,
+                "eur_usd": eur_usd,
+                "opened_count": len(opened),
+                "closed_count": mark_summary["closed"],
+                "closed_pnl": mark_summary["closed_pnl_total"],
+                "open_positions_count": len(open_positions),
+                "live_viable_count": len(live_viable),
+            }
+            subject, html = notify.render_full_email(
+                week_label=week_label,
+                candidates=sandbox_candidates,
+                summaries=summaries,
+                open_positions=open_positions,
+                health=health,
+                recommendations=recommendations,
+                live_candidates=live_candidates,
+                flags=flags,
+            )
+            preview_path = notify.write_preview(subject, html)
+            sent = notify.send_email(subject, html)
+            if not sent:
+                logger.warning(f"Email not sent (SMTP creds missing?). Preview at {preview_path}")
 
         # 10. Log the screen
         journal.append("screens", {
             "screen_id": screen_id,
+            "run_type": run_type,
             "ran_at": now.isoformat(),
             "universe_size": len(tickers),
             "passed_filters": len(ranked),
@@ -583,9 +619,16 @@ def _try_connect_ibkr():
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="CSP Screener — weekly run")
+    parser = argparse.ArgumentParser(description="CSP Screener — weekly/daily run")
     parser.add_argument("--no-ibkr", action="store_true", help="Skip IBKR, use yfinance only")
     parser.add_argument("--force-send", action="store_true", help="Force email even if empty")
+    parser.add_argument("--daily", action="store_true",
+                        help="Daily indications run: full screen + virtual opens, "
+                             "no email (dashboard-only)")
     args = parser.parse_args()
-    exit_code = run_weekly_screen(force_send=args.force_send, use_ibkr=not args.no_ibkr)
+    exit_code = run_weekly_screen(
+        force_send=args.force_send,
+        use_ibkr=not args.no_ibkr,
+        run_type="daily" if args.daily else "weekly",
+    )
     sys.exit(exit_code)

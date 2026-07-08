@@ -17,6 +17,7 @@
 CREATE TABLE IF NOT EXISTS public.screens (
     id BIGSERIAL PRIMARY KEY,
     screen_id TEXT UNIQUE NOT NULL,
+    run_type TEXT DEFAULT 'weekly',    -- 'weekly' | 'daily'; NULL = weekly (legacy)
     ran_at TIMESTAMPTZ NOT NULL,
     universe_size INTEGER,
     passed_filters INTEGER,
@@ -124,7 +125,10 @@ BEGIN
         ('no_trade_week', 'BOOLEAN'),
         ('post_spike_window', 'BOOLEAN'),
         ('fomc_days', 'INTEGER'),
-        ('eur_usd_rate', 'NUMERIC(10,4)')
+        ('eur_usd_rate', 'NUMERIC(10,4)'),
+        -- 'weekly' (Sunday digest run) or 'daily' (weekday indications run).
+        -- NULL on legacy rows means 'weekly'.
+        ('run_type', 'TEXT')
     ) AS t(name, type)
     LOOP
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns

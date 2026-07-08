@@ -107,6 +107,21 @@ def test_step_open_dedups_same_contract():
     assert len(virtual_tracker.get_open_virtual_trades()) == 1
 
 
+def test_step_open_dedups_same_ticker_different_strike():
+    # Daily runs resurface the same name at drifting strikes — only ONE open
+    # virtual position per ticker is allowed, or the paper pool fills with
+    # correlated near-duplicates.
+    from csp_screener.main import step_open_virtual_positions
+
+    first = step_open_virtual_positions(
+        [{"ticker": "TEST", "setup": _setup(strike=19.0).to_dict()}], "screen_mon")
+    assert len(first) == 1
+    second = step_open_virtual_positions(
+        [{"ticker": "TEST", "setup": _setup(strike=18.0).to_dict()}], "screen_tue")
+    assert len(second) == 0
+    assert len(virtual_tracker.get_open_virtual_trades()) == 1
+
+
 def test_step_open_respects_max_virtual_open(monkeypatch):
     from csp_screener.main import step_open_virtual_positions
     monkeypatch.setattr(config, "MAX_VIRTUAL_OPEN", 2)

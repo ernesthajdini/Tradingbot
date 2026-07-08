@@ -11,6 +11,7 @@ export interface Recommendation {
 export interface Screen {
   id: number;
   screen_id: string;
+  run_type: 'weekly' | 'daily' | null; // null = weekly (legacy rows)
   ran_at: string;
   universe_size: number | null;
   passed_filters: number | null;
@@ -24,6 +25,11 @@ export interface Screen {
   candidates_payload: CandidatePayload[] | null;
   summaries_payload: Record<string, PerformanceSummary> | null;
   recommendations_payload: Recommendation[] | null;
+  live_viable: number | null;
+  no_trade_week: boolean | null;
+  post_spike_window: boolean | null;
+  fomc_days: number | null;
+  eur_usd_rate: number | null;
   recorded_at: string;
 }
 

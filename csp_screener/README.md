@@ -11,17 +11,20 @@ performance record over time — even when you don't take any live trades.
 
 | | |
 |---|---|
-| **Sunday 6 PM** | Sends weekly email with 5 ranked candidates + virtual track record |
-| **Mon–Fri after close** | Marks open virtual positions to market, closes any that hit exit rules |
+| **Sunday 6 PM** | Sends weekly email with ranked candidates (both tiers) + virtual track record |
+| **Mon–Fri hourly (market hours)** | Marks open virtual positions to market, closes any that hit exit rules |
+| **Mon–Fri after close** | **Daily indications run**: full screen, opens paper positions (one per ticker), no email — see the dashboard's Daily tab |
 | **Every run** | Pings healthchecks.io (silence = something broke) |
+
+Everything runs in **GitHub Actions** (see `.github/workflows/`); data dual-writes
+to local JSONL + **Supabase**, and the **Vercel dashboard** (`dashboard-web/`)
+is the read surface. Your PC is not required. See `CLOUD_DEPLOY.md`.
 
 ## What it deliberately does NOT do
 
-- Auto-execution (never)
+- Auto-execution (never — tickets are staged, you approve/reject in IBKR)
 - Real-time alerts
-- Specific contract picks (you choose strike/expiry — that's the learning loop)
-- A web dashboard
-- Cloud hosting (runs on your Windows machine)
+- Contract picks you didn't gate: the LIVE tier stages complete tickets; the sandbox tier is paper-only research
 
 ---
 

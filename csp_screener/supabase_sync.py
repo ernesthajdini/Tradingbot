@@ -68,6 +68,7 @@ def push_screen(record: dict) -> bool:
     try:
         row = {
             "screen_id": record.get("screen_id"),
+            "run_type": record.get("run_type") or "weekly",
             "ran_at": record.get("ran_at"),
             "universe_size": record.get("universe_size"),
             "passed_filters": record.get("passed_filters"),

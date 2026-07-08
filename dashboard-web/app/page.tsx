@@ -71,6 +71,13 @@ export default async function DashboardPage() {
           <div className="bg-panel border border-border rounded-lg p-5">
             <div className="flex flex-wrap items-baseline justify-between gap-2">
               <div className="text-sm text-muted">
+                <span className={`mr-2 px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                  latest.run_type === 'daily'
+                    ? 'bg-accent/15 text-accent'
+                    : 'bg-success/20 text-success'
+                }`}>
+                  {latest.run_type === 'daily' ? 'Daily' : 'Weekly'}
+                </span>
                 Ran <span className="text-text font-mono">{new Date(latest.ran_at).toLocaleString()}</span>
               </div>
               <div className="text-sm text-muted">

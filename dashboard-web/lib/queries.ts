@@ -8,11 +8,19 @@ import type {
   ClosedVirtualTrade, OpenVirtualTrade, Screen, SystemEvent,
 } from './types';
 
-export async function fetchLatestScreen(): Promise<Screen | null> {
+type RunType = 'weekly' | 'daily';
+
+/** Legacy rows predate run_type and are all weekly, hence the is.null arm. */
+function withRunType(query: any, runType?: RunType) {
+  if (runType === 'daily') return query.eq('run_type', 'daily');
+  if (runType === 'weekly') return query.or('run_type.eq.weekly,run_type.is.null');
+  return query;
+}
+
+export async function fetchLatestScreen(runType?: RunType): Promise<Screen | null> {
   const supabase = await createClient();
-  const { data, error } = await supabase
-    .from('screens')
-    .select('*')
+  const { data, error } = await withRunType(
+    supabase.from('screens').select('*'), runType)
     .order('ran_at', { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -23,11 +31,10 @@ export async function fetchLatestScreen(): Promise<Screen | null> {
   return data as Screen | null;
 }
 
-export async function fetchRecentScreens(limit = 30): Promise<Screen[]> {
+export async function fetchRecentScreens(limit = 30, runType?: RunType): Promise<Screen[]> {
   const supabase = await createClient();
-  const { data, error } = await supabase
-    .from('screens')
-    .select('*')
+  const { data, error } = await withRunType(
+    supabase.from('screens').select('*'), runType)
     .order('ran_at', { ascending: false })
     .limit(limit);
   if (error) {
