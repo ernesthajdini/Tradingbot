@@ -158,6 +158,17 @@ seen_live = set()
 UNIVERSE_LIVE = [t for t in UNIVERSE_LIVE if not (t in seen_live or seen_live.add(t))]
 
 
+# ---------------------------------------------------------------------------
+# ETFs across both universes. They have no earnings, so the earnings fetcher
+# skips them entirely — otherwise every run burns API calls on guaranteed
+# 404s and the "earnings coverage collapsed" canary counts them as missing.
+# ---------------------------------------------------------------------------
+ETFS: frozenset[str] = frozenset({
+    "XLE", "XLF", "XLU", "XLP", "EEM", "GDX", "GDXJ", "SLV", "USO",
+    "TLT", "HYG", "EWZ", "FXI", "IWM",
+})
+
+
 def get_universe(tier: str = "sandbox") -> list[str]:
     """Return the universe for a tier: 'live' or 'sandbox'."""
     if tier == "live":

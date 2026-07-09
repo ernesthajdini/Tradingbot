@@ -401,11 +401,33 @@ def run_weekly_screen(
         from csp_screener import fomc
         fomc_days = fomc.days_to_fomc()
 
-        # 0b. VIX kill switch (daily runs skip the email — weekly already sent it)
+        # 0b. VIX kill switch (daily runs skip the email — weekly already sent it).
+        # A minimal screens record is still journaled: without it the CI
+        # "verify data landed" gate goes falsely red on kill days, the
+        # dashboard shows stale data with no explanation, and kill days
+        # vanish from the track record.
         if vix is not None and vix > config.VIX_KILL_SWITCH:
             logger.warning(f"VIX {vix:.1f} > kill switch {config.VIX_KILL_SWITCH}")
             if not is_daily:
                 kill_email(now, vix)
+            journal.append("screens", {
+                "screen_id": screen_id,
+                "run_type": run_type,
+                "ran_at": now.isoformat(),
+                "universe_size": len(tickers),
+                "passed_filters": 0,
+                "candidates_in_email": 0,
+                "virtual_positions_opened": 0,
+                "virtual_closed_this_run": 0,
+                "virtual_closed_pnl": 0.0,
+                "vix": vix,
+                "email_sent": False,
+                "tickers_in_email": [],
+                "candidates_payload": [],
+                "live_viable": 0,
+                "no_trade_week": True,
+                "eur_usd_rate": eur_usd,
+            })
             deadman.ping_success(f"VIX kill switch triggered: {vix:.1f}")
             return 0
 

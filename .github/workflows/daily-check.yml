@@ -74,3 +74,22 @@ jobs:
 
       - name: Run daily indications screen
         run: python -m csp_screener.main --no-ibkr --daily
+
+      # Same gate as the Sunday workflow: individual Supabase pushes are
+      # non-fatal, but a run that wrote NOTHING to the cloud must fail
+      # loudly instead of showing a lying green checkmark.
+      - name: Verify data landed in Supabase
+        run: |
+          python -c "
+          import sys
+          from csp_screener import supabase_sync
+          if not supabase_sync.is_enabled():
+              print('WARNING: Supabase not configured — running local-only.')
+              print('Set SUPABASE_URL and SUPABASE_SERVICE_KEY repo secrets.')
+              sys.exit(1)
+          if not supabase_sync.verify_recent_screen():
+              print('FAIL: daily screen ran but NOTHING landed in Supabase.')
+              print('Check SUPABASE_URL (no /rest/v1 suffix!) and SUPABASE_SERVICE_KEY.')
+              sys.exit(1)
+          print('OK: Supabase has a fresh screens row.')
+          "

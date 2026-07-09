@@ -5,6 +5,9 @@ import type { CandidatePayload } from '@/lib/types';
 import { ScreenCandidates } from '../components/screen-candidates';
 import { ScreensTable } from '../components/screens-table';
 
+// Mirrors VIX_KILL_SWITCH in csp_screener/config.py (display-only heuristic).
+const VIX_KILL_SWITCH = 35;
+
 export default async function DailyPage() {
   const [latest, recent] = await Promise.all([
     fetchLatestScreen('daily'),
@@ -30,6 +33,18 @@ export default async function DailyPage() {
           {latest?.vix != null && <> · VIX {latest.vix}</>}
         </p>
       </div>
+
+      {latest && latest.vix != null && Number(latest.vix) > VIX_KILL_SWITCH && (
+        <div className="rounded-lg border-2 border-danger/60 bg-danger/5 p-4">
+          <div className="font-semibold text-danger">
+            ⛔ VIX {Number(latest.vix).toFixed(1)} — kill switch active
+          </div>
+          <div className="text-xs text-muted mt-1">
+            Selling premium into a vol spike is the classic retail blow-up. The screener stood
+            down and generated no candidates. Open positions ride to their normal exits.
+          </div>
+        </div>
+      )}
 
       {latest ? (
         <ScreenCandidates candidates={candidates} />

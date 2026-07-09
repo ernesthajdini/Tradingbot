@@ -188,9 +188,19 @@ def fetch_next_earnings(ticker: str) -> Optional[datetime]:
 
 
 def fetch_batch_earnings(tickers: list[str]) -> dict[str, Optional[datetime]]:
-    """Fetch earnings for a batch. Sleeps respect Finnhub rate limit."""
+    """
+    Fetch earnings for a batch. Sleeps respect Finnhub rate limit.
+
+    ETFs are omitted from the result entirely (not set to None): they have no
+    earnings, so querying wastes API calls, and including them as None would
+    inflate the missing-coverage ratio that triggers the broken-data-source
+    canary. Downstream uses .get(ticker), so absence == no earnings filter.
+    """
+    from csp_screener.universe import ETFS
     out: dict[str, Optional[datetime]] = {}
     for t in tickers:
+        if t in ETFS:
+            continue
         out[t] = fetch_next_earnings(t)
     return out
 
