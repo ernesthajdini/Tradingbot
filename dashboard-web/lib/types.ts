@@ -89,6 +89,8 @@ export interface OpenVirtualTrade {
   breakeven: number;
   delta_at_open: number | null;
   iv_at_open: number | null;
+  rv_percentile_at_open?: number | null;
+  vix_at_open?: number | null;
   data_quality: string;
 }
 
@@ -108,6 +110,8 @@ export interface ClosedVirtualTrade {
   breakeven: number;
   delta_at_open: number | null;
   iv_at_open: number | null;
+  rv_percentile_at_open?: number | null;
+  vix_at_open?: number | null;
   data_quality: string;
   exit_reason: string;
   final_put_price: number;

@@ -45,10 +45,20 @@ logger = logging.getLogger(__name__)
 # Open / re-price / close
 # ---------------------------------------------------------------------------
 
-def open_virtual_position(setup: VirtualSetup, screen_id: str) -> str:
+def open_virtual_position(
+    setup: VirtualSetup,
+    screen_id: str,
+    rv_percentile: float | None = None,
+    vix: float | None = None,
+) -> str:
     """
     Log an OPEN event. Returns the virtual trade_id.
     trade_id = "{screen_id}::{ticker}::{strike}::{expiration}".
+
+    rv_percentile / vix stamp the ENTRY context onto the record. The feature
+    analyzer buckets closed trades by these to learn which vol regimes win —
+    without stamping them at open, those two learning dimensions can never
+    populate (the journal is append-only; there is no backfill later).
     """
     trade_id = f"{screen_id}::{setup.ticker}::{setup.strike}::{setup.expiration}"
     record = {
@@ -72,6 +82,10 @@ def open_virtual_position(setup: VirtualSetup, screen_id: str) -> str:
         "long_strike": getattr(setup, "long_strike", None),
         "tier": getattr(setup, "tier", "sandbox"),
     }
+    if rv_percentile is not None:
+        record["rv_percentile_at_open"] = round(float(rv_percentile), 2)
+    if vix is not None:
+        record["vix_at_open"] = round(float(vix), 2)
     journal.append("virtual_trades", record)
     logger.info(f"Virtual position opened [{record['tier']}/{record['structure']}]: {trade_id}")
     return trade_id

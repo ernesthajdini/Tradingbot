@@ -151,11 +151,19 @@ export function filterTradesByDays(trades: ClosedVirtualTrade[], days: number | 
 /**
  * Compute per-ticker stats with Bayesian shrinkage — matches Python ticker_scorer.
  * Keeping it in TS lets the dashboard surface live insights without an extra
- * round trip through Python.
+ * round trip through Python. If you change the formula here, change it in
+ * csp_screener/learning/ticker_scorer.py too (and vice versa).
  */
 const PRIOR_TRADES = 5;
 const PRIOR_WIN_RATE = 0.5;
 const TICKER_MIN_TRADES = 3;
+const LOOKBACK_DAYS = 180; // mirrors ticker_scorer.LOOKBACK_DAYS
+// Expectancy-primary scoring (mirrors ticker_scorer.py): PnL per unit of
+// credit drives the score; win rate is a small secondary added ONLY on top
+// of positive expectancy. Premium selling wins often and loses big — win
+// rate alone is the wrong scoreboard.
+const EXPECTANCY_SCALE = 0.5;
+const WINRATE_SECONDARY_SCALE = 0.2;
 
 export interface TickerScore {
   ticker: string;
@@ -166,12 +174,19 @@ export interface TickerScore {
   shrunkWinRate: number;
   avgPnl: number;
   totalPnl: number;
+  avgPnlPct: number;
+  shrunkExpectancy: number;
   score: number;
   sampleQuality: 'thin' | 'moderate' | 'robust';
 }
 
 export function scoreTicker(ticker: string, trades: ClosedVirtualTrade[]): TickerScore {
-  const relevant = trades.filter(t => t.ticker === ticker);
+  const cutoff = Date.now() - LOOKBACK_DAYS * 86_400_000;
+  const relevant = trades.filter(t => {
+    if (t.ticker !== ticker) return false;
+    const closedAt = new Date(t.closed_at).getTime();
+    return isFinite(closedAt) ? closedAt >= cutoff : false;
+  });
   const pnls = relevant.map(t => Number(t.pnl) || 0);
   const wins = pnls.filter(p => p > 0).length;
   const losses = pnls.filter(p => p <= 0).length;
@@ -184,10 +199,31 @@ export function scoreTicker(ticker: string, trades: ClosedVirtualTrade[]): Ticke
   if (n >= 10) quality = 'robust';
   else if (n >= TICKER_MIN_TRADES) quality = 'moderate';
 
+  // PnL as fraction of credit received (falls back to pnl/credit)
+  const pnlPcts: number[] = [];
+  for (const t of relevant) {
+    let v: number | null = t.pnl_pct_of_credit != null ? Number(t.pnl_pct_of_credit) : null;
+    if (v == null && t.credit_received && Number(t.credit_received) > 0 && t.pnl != null) {
+      v = Number(t.pnl) / Number(t.credit_received);
+    }
+    if (v != null && isFinite(v)) pnlPcts.push(v);
+  }
+  const pctSum = pnlPcts.reduce((a, b) => a + b, 0);
+  const avgPnlPct = pnlPcts.length ? pctSum / pnlPcts.length : 0;
+  const shrunkExpectancy = pnlPcts.length ? pctSum / (pnlPcts.length + PRIOR_TRADES) : 0;
+
   let score = 1.0;
   if (n >= TICKER_MIN_TRADES) {
-    score = 1.0 + ((shrunkWr - 0.5) / 0.5) * 0.2;
-    if (avg < 0) score *= 0.9;
+    if (pnlPcts.length >= TICKER_MIN_TRADES) {
+      // Win rate only ever ADDS on top of positive expectancy
+      const wrComponent = shrunkExpectancy > 0
+        ? (shrunkWr - 0.5) * WINRATE_SECONDARY_SCALE : 0;
+      score = 1.0 + shrunkExpectancy * EXPECTANCY_SCALE + wrComponent;
+    } else {
+      // Legacy fallback: no credit data — original win-rate-only mapping
+      score = 1.0 + ((shrunkWr - 0.5) / 0.5) * 0.2;
+      if (avg < 0) score *= 0.9;
+    }
     score = Math.max(0.5, Math.min(1.2, score));
   }
 
@@ -195,6 +231,7 @@ export function scoreTicker(ticker: string, trades: ClosedVirtualTrade[]): Ticke
     ticker, trades: n, wins, losses,
     rawWinRate: rawWr, shrunkWinRate: shrunkWr,
     avgPnl: avg, totalPnl: total,
+    avgPnlPct, shrunkExpectancy,
     score, sampleQuality: quality,
   };
 }

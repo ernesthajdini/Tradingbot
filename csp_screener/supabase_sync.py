@@ -125,6 +125,8 @@ def push_virtual_trade(record: dict) -> bool:
             "delta_at_open": record.get("delta_at_open"),
             "iv_at_open": record.get("iv_at_open"),
             "data_quality": record.get("data_quality"),
+            "rv_percentile_at_open": record.get("rv_percentile_at_open"),
+            "vix_at_open": record.get("vix_at_open"),
             "closed_at": record.get("closed_at"),
             "exit_reason": record.get("exit_reason"),
             "exit_spot": record.get("exit_spot"),
@@ -145,10 +147,41 @@ def push_virtual_trade(record: dict) -> bool:
         }
         # Strip Nones to keep payload small
         row = {k: v for k, v in row.items() if v is not None}
-        client.table("virtual_trades").upsert(
-            row, on_conflict="event,trade_id"
-        ).execute()
-        return True
+        try:
+            client.table("virtual_trades").upsert(
+                row, on_conflict="event,trade_id"
+            ).execute()
+            return True
+        except Exception as first_err:
+            # Defensive fallback: if the cloud schema predates the newest
+            # columns (migration not yet run), retry WITHOUT them rather than
+            # losing the whole record. The entry-context fields are worth
+            # less than the trade itself.
+            #
+            # Gate on the ERROR SIGNATURE, not just payload contents: a
+            # transient 5xx/timeout must NOT trigger the strip — the journal
+            # pushes each record exactly once, so a stripped retry would
+            # silently lose the fields forever even on a fully-migrated DB.
+            # PostgREST missing-column error: code PGRST204, message names
+            # the offending column.
+            newest_cols = ("rv_percentile_at_open", "vix_at_open")
+            err_text = str(first_err)
+            missing_column_error = (
+                "PGRST204" in err_text
+                or any(c in err_text for c in newest_cols)
+            )
+            if not any(c in row for c in newest_cols) or not missing_column_error:
+                raise
+            stripped = {k: v for k, v in row.items() if k not in newest_cols}
+            client.table("virtual_trades").upsert(
+                stripped, on_conflict="event,trade_id"
+            ).execute()
+            logger.warning(
+                f"Supabase push succeeded only WITHOUT {newest_cols} "
+                f"(first error: {first_err}). Re-run supabase/schema.sql "
+                f"in the SQL Editor to add the missing columns."
+            )
+            return True
     except Exception as e:
         logger.warning(f"Supabase push_virtual_trade failed: {e}")
         return False
@@ -210,6 +243,7 @@ _HYDRATE_FIELDS_FLOAT = (
     "delta_at_open", "iv_at_open", "exit_spot", "final_put_price",
     "pnl", "pnl_gross", "friction", "pnl_pessimistic", "eur_usd_rate",
     "pnl_eur", "long_strike", "pnl_pct_of_credit",
+    "rv_percentile_at_open", "vix_at_open",
 )
 _HYDRATE_FIELDS_TS = ("opened_at", "closed_at", "recorded_at")
 
@@ -309,6 +343,37 @@ def hydrate_virtual_trades() -> dict:
     except Exception as e:
         logger.warning(f"Hydration from Supabase failed: {e}")
         return {"hydrated": False, "reason": str(e)}
+
+
+def fetch_screens_map(limit: int = 1000) -> dict:
+    """
+    {screen_id: row} for recent screens, from the CLOUD.
+
+    Why: the learning layer recovers RV/VIX entry context for trades that
+    predate at-open stamping by looking up their screen record — but on
+    stateless GitHub Actions runners the local screens.jsonl is empty (only
+    virtual_trades gets hydrated). Supabase is where the history actually
+    lives. Returns {} when Supabase isn't configured or on any error.
+    """
+    client = _get_client()
+    if client is None:
+        return {}
+    try:
+        res = (
+            client.table("screens")
+            .select("screen_id,vix,candidates_payload")
+            .order("ran_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return {
+            r["screen_id"]: r
+            for r in (res.data or [])
+            if r.get("screen_id")
+        }
+    except Exception as e:
+        logger.warning(f"fetch_screens_map failed: {e}")
+        return {}
 
 
 # ---------------------------------------------------------------------------

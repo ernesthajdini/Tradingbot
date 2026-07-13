@@ -107,6 +107,27 @@ def test_step_open_dedups_same_contract():
     assert len(virtual_tracker.get_open_virtual_trades()) == 1
 
 
+def test_open_stamps_entry_context_for_learning():
+    # rv_percentile/vix at open feed the feature analyzer's vol-regime
+    # buckets; without stamping, those learning dimensions never populate.
+    from csp_screener.main import step_open_virtual_positions
+
+    candidate = {"ticker": "TEST", "rv_percentile": 91.3, "setup": _setup().to_dict()}
+    opened = step_open_virtual_positions([candidate], "screen_ctx", vix=17.4)
+    assert len(opened) == 1
+    open_ev = journal.read_filtered("virtual_trades", event="open")[0]
+    assert open_ev["rv_percentile_at_open"] == pytest.approx(91.3)
+    assert open_ev["vix_at_open"] == pytest.approx(17.4)
+
+
+def test_open_omits_entry_context_when_unknown():
+    s = _setup()
+    virtual_tracker.open_virtual_position(s, "screen_noctx")
+    open_ev = journal.read_filtered("virtual_trades", event="open")[0]
+    assert "rv_percentile_at_open" not in open_ev
+    assert "vix_at_open" not in open_ev
+
+
 def test_step_open_dedups_same_ticker_different_strike():
     # Daily runs resurface the same name at drifting strikes — only ONE open
     # virtual position per ticker is allowed, or the paper pool fills with

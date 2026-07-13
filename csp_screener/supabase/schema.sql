@@ -61,6 +61,8 @@ CREATE TABLE IF NOT EXISTS public.virtual_trades (
     breakeven NUMERIC(10, 4),
     delta_at_open NUMERIC(8, 4),
     iv_at_open NUMERIC(8, 4),
+    rv_percentile_at_open NUMERIC(8, 2),  -- entry context for the learning layer
+    vix_at_open NUMERIC(8, 2),            -- entry context for the learning layer
     data_quality TEXT,
     -- Close event fields
     closed_at TIMESTAMPTZ,
@@ -147,7 +149,9 @@ BEGIN
         ('pnl_eur', 'NUMERIC(12,2)'),
         ('structure', 'TEXT'),
         ('tier', 'TEXT'),
-        ('long_strike', 'NUMERIC(10,4)')
+        ('long_strike', 'NUMERIC(10,4)'),
+        ('rv_percentile_at_open', 'NUMERIC(8,2)'),
+        ('vix_at_open', 'NUMERIC(8,2)')
     ) AS t(name, type)
     LOOP
         IF NOT EXISTS (SELECT 1 FROM information_schema.columns
@@ -202,6 +206,8 @@ SELECT
     o.breakeven,
     o.delta_at_open,
     o.iv_at_open,
+    o.rv_percentile_at_open,
+    o.vix_at_open,
     o.data_quality,
     c.exit_reason,
     c.final_put_price,

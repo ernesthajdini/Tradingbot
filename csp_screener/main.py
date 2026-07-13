@@ -214,7 +214,11 @@ def step_generate_setups(ranked, ibkr_client=None, tier: str = "sandbox") -> lis
     return out
 
 
-def step_open_virtual_positions(candidates: list[dict], screen_id: str) -> list[str]:
+def step_open_virtual_positions(
+    candidates: list[dict],
+    screen_id: str,
+    vix: float | None = None,
+) -> list[str]:
     """
     Open virtual positions for each candidate that has a valid setup.
 
@@ -263,7 +267,10 @@ def step_open_virtual_positions(candidates: list[dict], screen_id: str) -> list[
             )
             break
         setup = VirtualSetup(**setup_dict)
-        trade_id = virtual_tracker.open_virtual_position(setup, screen_id)
+        trade_id = virtual_tracker.open_virtual_position(
+            setup, screen_id,
+            rv_percentile=c.get("rv_percentile"), vix=vix,
+        )
         opened.append(trade_id)
         already_open.add(key)
         open_tickers.add(setup_dict["ticker"])
@@ -480,7 +487,7 @@ def run_weekly_screen(
         ranked = live_ranked + sandbox_ranked  # for health check counts
 
         # 6. Open virtual positions for BOTH tiers (unthrottled paper engine)
-        opened = step_open_virtual_positions(candidates, screen_id)
+        opened = step_open_virtual_positions(candidates, screen_id, vix=vix)
         logger.info(f"Opened {len(opened)} virtual positions "
                     f"({len(live_viable)} live-tier viable)")
 
@@ -498,8 +505,25 @@ def run_weekly_screen(
             closed = _reconstruct_closed_trades()
             ts = ticker_scorer.score_all_tickers(closed)
             baseline = feature_analyzer.overall_baseline(closed)
-            buckets = feature_analyzer.analyze_features(closed)
-            recommendations = recommender.all_recommendations(baseline, ts, buckets)
+            # screens_by_id lets the analyzer recover RV/VIX entry context
+            # for trades that predate the at-open stamping. Local journal
+            # first, then the cloud — on GitHub Actions the local screens
+            # journal is empty (only virtual_trades hydrates), so Supabase
+            # is the only source with history there.
+            screens_by_id = {
+                r.get("screen_id"): r
+                for r in journal.read_all("screens") if r.get("screen_id")
+            }
+            try:
+                from csp_screener import supabase_sync
+                cloud_screens = supabase_sync.fetch_screens_map()
+                # Local records win on conflict (they are the same data)
+                screens_by_id = {**cloud_screens, **screens_by_id}
+            except Exception as e:
+                logger.debug(f"Cloud screens map skipped: {e}")
+            buckets = feature_analyzer.analyze_features(closed, screens_by_id)
+            recommendations = recommender.all_recommendations(
+                baseline, ts, buckets, closed_trades=closed)
             logger.info(f"Learning: {len(recommendations)} recommendations generated")
         except Exception as e:
             logger.debug(f"Recommendations step skipped: {e}")
