@@ -60,6 +60,71 @@ def _pnl_color(pnl: float) -> str:
     return "#6e7781"
 
 
+def _fmt_expiry(iso_date: str) -> tuple[str, int]:
+    """('Fri, Jul 31 2026', days_from_now) from a YYYY-MM-DD string."""
+    try:
+        d = datetime.fromisoformat(iso_date)
+        days = max(0, (d.date() - datetime.now().date()).days)
+        return d.strftime("%a, %b %d %Y"), days
+    except (ValueError, TypeError):
+        return iso_date, 0
+
+
+def _plain_action_html(setup: dict, ticker: str, last_price: float) -> str:
+    """
+    The 'what exactly to trade, in one glance' block. Pure translation of
+    the setup's existing numbers into sentences — no new math except the
+    display-only return-on-risk ratio.
+    """
+    pretty, days = _fmt_expiry(setup["expiration"])
+    is_spread = (setup.get("structure") == "put_credit_spread"
+                 and setup.get("long_strike") is not None)
+    credit = setup.get("net_credit_after_friction") or setup["estimated_credit_per_contract"]
+    max_loss = setup["max_loss_per_contract"]
+    strike = setup["strike"]
+
+    if is_spread:
+        headline = (
+            f"SELL the ${strike:.2f} put &nbsp;+&nbsp; "
+            f"BUY the ${setup['long_strike']:.2f} put"
+        )
+        worst = (
+            f"<b style='color:#cf222e;'>Worst case &minus;${max_loss:.0f}</b> "
+            f"— capped by the bought put, no matter how far it falls."
+        )
+        collect_note = " (net, after costs)"
+    else:
+        headline = f"SELL 1 &times; {escape(ticker)} ${strike:.2f} PUT"
+        worst = (
+            f"<b style='color:#cf222e;'>Worst case &minus;${max_loss:.0f}</b> "
+            f"if {escape(ticker)} went to zero. "
+            f"You start losing below ${setup['breakeven']:.2f}."
+        )
+        collect_note = ""
+
+    return f"""
+    <div style="margin-top:8px;padding:12px 14px;background:#f0f6ff;
+                border:1px solid #a5c9ff;border-radius:8px;">
+      <div style="font-size:10px;font-weight:700;letter-spacing:1px;color:#0969da;
+                  text-transform:uppercase;margin-bottom:4px;">The trade</div>
+      <div style="font-size:15px;font-weight:700;font-family:monospace;">
+        {headline}
+        <span style="font-weight:400;font-family:sans-serif;color:#57606a;font-size:13px;">
+          — expires <b>{pretty}</b> ({days} days from now)
+        </span>
+      </div>
+      <div style="font-size:13px;margin-top:8px;line-height:1.7;">
+        <span style="color:#2da44e;font-weight:600;">You collect ≈ ${credit:.0f}</span>
+        per contract, up front{collect_note}.<br>
+        <b>You win</b> if {escape(ticker)} stays above <b>${strike:.2f}</b> through {pretty}
+        — the strike is {setup['pct_otm']*100:.0f}% below today's ${last_price:.2f}.<br>
+        {worst}<br>
+        <span style="color:#57606a;">Exit plan: buy back at 50% of the credit,
+        or close when 21 days remain — whichever comes first.</span>
+      </div>
+    </div>"""
+
+
 def render_candidates_section(candidates: list[dict]) -> str:
     """candidates is a list of dicts each with merged ranked + setup data."""
     if not candidates:
@@ -69,91 +134,52 @@ def render_candidates_section(candidates: list[dict]) -> str:
             "filters (price band / volume / earnings / VIX kill switch).</div>"
         )
 
-    rows = []
+    cards = []
     for c in candidates:
         setup = c.get("setup")
         rv_pct = c.get("rv_percentile", 0)
         next_earn = c.get("next_earnings_days")
         earn_str = (
-            f"{next_earn}d" if (next_earn is not None and next_earn >= 0)
-            else "unknown"
+            f"earnings in {next_earn}d" if (next_earn is not None and next_earn >= 0)
+            else "earnings date unknown"
         )
+        header = f"""
+        <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;">
+          <span style="font-size:17px;font-weight:700;font-family:monospace;">
+            {escape(c['ticker'])}
+            <span style="font-weight:400;font-family:sans-serif;font-size:12px;color:#6e7781;">
+              ${c['last_price']:.2f} · vol rank {rv_pct:.0f}/100 · {earn_str}
+            </span>
+          </span>
+          {_quality_badge(setup.get('data_quality', 'unknown')) if setup else ''}
+        </div>"""
 
         if not setup:
-            row = f"""
-            <tr style="border-bottom:1px solid #d0d7de;">
-              <td style="padding:10px;font-weight:600;font-size:15px;">{escape(c['ticker'])}</td>
-              <td style="padding:10px;color:#6e7781;font-style:italic;" colspan="6">
-                No liquid put found in DTE window. Underlying still on the list — check it manually.
-              </td>
-            </tr>"""
-            rows.append(row)
-            continue
+            body = (
+                "<div style='margin-top:6px;font-size:13px;color:#6e7781;font-style:italic;'>"
+                "No liquid put found in the expiry window. Underlying still ranked — "
+                "check the chain manually in IBKR.</div>"
+            )
+        else:
+            credit = setup["estimated_credit_per_contract"]
+            max_loss = setup["max_loss_per_contract"]
+            roc = (credit / max_loss * 100) if max_loss > 0 else 0
+            annualized = roc * (365 / max(1, setup["dte"]))
+            delta_str = f"{setup['delta']:+.2f}" if setup.get("delta") is not None else "?"
+            iv_str = f"{setup['iv']*100:.0f}%" if setup.get("iv") is not None else "?"
+            body = _plain_action_html(setup, c["ticker"], c["last_price"]) + f"""
+            <div style="margin-top:6px;font-size:11px;color:#6e7781;">
+              For the detail-inclined: {roc:.1f}% return on risk ({annualized:.0f}% annualized)
+              · Δ {delta_str} · IV {iv_str} · open interest {setup.get('open_interest', '?')}
+            </div>"""
 
-        credit = setup["estimated_credit_per_contract"]
-        max_loss = setup["max_loss_per_contract"]
-        breakeven = setup["breakeven"]
-        roc = (credit / max_loss * 100) if max_loss > 0 else 0  # return on collateral
-        annualized = roc * (365 / max(1, setup["dte"]))
-        delta_str = f"{setup['delta']:+.3f}" if setup.get("delta") is not None else "?"
-        iv_str = f"{setup['iv']*100:.1f}%" if setup.get("iv") is not None else "?"
+        cards.append(f"""
+        <div style="border:1px solid #d0d7de;border-radius:8px;padding:14px;margin:10px 0;">
+          {header}
+          {body}
+        </div>""")
 
-        row = f"""
-        <tr style="border-bottom:1px solid #d0d7de;">
-          <td style="padding:10px;font-weight:600;font-size:15px;">
-            {escape(c['ticker'])}
-            <div style="font-size:11px;color:#6e7781;font-weight:400;margin-top:2px;">
-              ${c['last_price']:.2f} | RV pct {rv_pct:.0f} | earn {earn_str}
-            </div>
-          </td>
-          <td style="padding:10px;">
-            <div><b>${setup['strike']:.2f}P</b> {setup['expiration']}</div>
-            <div style="font-size:11px;color:#6e7781;">
-              {setup['dte']} DTE • {setup['pct_otm']*100:.1f}% OTM • Δ {delta_str} • IV {iv_str}
-            </div>
-          </td>
-          <td style="padding:10px;text-align:right;">
-            <b>${credit:.2f}</b>
-            <div style="font-size:11px;color:#6e7781;">credit</div>
-          </td>
-          <td style="padding:10px;text-align:right;">
-            ${max_loss:.0f}
-            <div style="font-size:11px;color:#6e7781;">max loss</div>
-          </td>
-          <td style="padding:10px;text-align:right;">
-            <b>{roc:.1f}%</b>
-            <div style="font-size:11px;color:#6e7781;">ROC ({annualized:.0f}% ann)</div>
-          </td>
-          <td style="padding:10px;text-align:right;">
-            ${breakeven:.2f}
-            <div style="font-size:11px;color:#6e7781;">breakeven</div>
-          </td>
-          <td style="padding:10px;text-align:center;">
-            {_quality_badge(setup.get('data_quality', 'unknown'))}
-          </td>
-        </tr>
-        """
-        rows.append(row)
-
-    table = f"""
-    <table style="width:100%;border-collapse:collapse;font-family:sans-serif;font-size:13px;">
-      <thead>
-        <tr style="background:#f6f8fa;text-align:left;">
-          <th style="padding:10px;">Ticker</th>
-          <th style="padding:10px;">Suggested Put</th>
-          <th style="padding:10px;text-align:right;">Credit</th>
-          <th style="padding:10px;text-align:right;">Max Loss</th>
-          <th style="padding:10px;text-align:right;">Return</th>
-          <th style="padding:10px;text-align:right;">Breakeven</th>
-          <th style="padding:10px;text-align:center;">Data</th>
-        </tr>
-      </thead>
-      <tbody>
-        {''.join(rows)}
-      </tbody>
-    </table>
-    """
-    return table
+    return "".join(cards)
 
 
 def render_performance_section(summaries: dict[str, PerformanceSummary]) -> str:
@@ -285,12 +311,16 @@ def render_live_section(live_candidates: list[dict], no_trade_week: bool) -> str
           <div style="display:flex;justify-content:space-between;align-items:baseline;">
             <span style="font-size:16px;font-weight:700;">{escape(c['ticker'])}
               <span style="font-weight:400;color:#6e7781;font-size:12px;">
-                ${c['last_price']:.2f} · RV pct {c.get('rv_percentile', 0):.0f}
+                ${c['last_price']:.2f} · vol rank {c.get('rv_percentile', 0):.0f}/100
               </span>
             </span>
             {_badge('PUT CREDIT SPREAD', '#2da44e')} {_quality_badge(s.get('data_quality', ''))}
           </div>
-          <pre style="background:#f6f8fa;border-radius:6px;padding:10px;margin:10px 0 4px;
+          {_plain_action_html(s, c['ticker'], c['last_price'])}
+          <div style="font-size:11px;color:#6e7781;margin-top:10px;">
+            The exact staged order (approve or reject in IBKR — never retype it):
+          </div>
+          <pre style="background:#f6f8fa;border-radius:6px;padding:10px;margin:4px 0;
                       font-size:12px;line-height:1.6;overflow-x:auto;">{ticket}</pre>
           <div style="font-size:11px;color:#6e7781;">
             Approve or reject — never modify by hand. A typed order is a tripwire event.

@@ -1,9 +1,72 @@
-import type { CandidatePayload } from '@/lib/types';
+import type { CandidatePayload, VirtualSetup } from '@/lib/types';
 
 /**
  * Shared two-tier candidate renderer used by /candidates (weekly) and
  * /daily (daily indications). Pure display — data fetching stays in pages.
  */
+
+function fmtExpiry(iso: string): { pretty: string; days: number } {
+  const d = new Date(iso + 'T16:00:00'); // options expire at US market close
+  const days = Math.max(0, Math.round((d.getTime() - Date.now()) / 86_400_000));
+  const pretty = d.toLocaleDateString('en-US', {
+    weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
+  });
+  return { pretty, days };
+}
+
+/**
+ * Plain-English "what exactly to trade" block. Every number comes straight
+ * from the setup — this is a translation layer, not new math.
+ */
+function TradeInPlainEnglish({ s, spot }: { s: VirtualSetup; spot: number }) {
+  const { pretty, days } = fmtExpiry(s.expiration);
+  const isSpread = s.structure === 'put_credit_spread' && s.long_strike != null;
+  const credit = s.net_credit_after_friction ?? s.estimated_credit_per_contract;
+
+  return (
+    <div className="mt-3 rounded-lg border border-accent/40 bg-accent/5 p-4">
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-accent mb-1">
+        The trade
+      </div>
+      <div className="font-mono font-semibold text-base">
+        {isSpread ? (
+          <>SELL the ${s.strike.toFixed(2)} put + BUY the ${Number(s.long_strike).toFixed(2)} put</>
+        ) : (
+          <>SELL 1 × {s.ticker} ${s.strike.toFixed(2)} PUT</>
+        )}
+        <span className="text-muted font-sans font-normal"> — expires </span>
+        {pretty}
+        <span className="text-muted font-sans font-normal"> ({days} days from now)</span>
+      </div>
+      <ul className="mt-2 text-sm space-y-1">
+        <li>
+          <span className="text-success font-medium">You collect ≈ ${Number(credit).toFixed(0)}</span>
+          <span className="text-muted"> per contract, up front{isSpread ? ' (net, after costs)' : ''}.</span>
+        </li>
+        <li>
+          <span className="font-medium">You win</span>
+          <span className="text-muted">
+            {' '}if {s.ticker} stays above ${s.strike.toFixed(2)} through {pretty} — the strike is{' '}
+            {(s.pct_otm * 100).toFixed(0)}% below today&apos;s ${spot.toFixed(2)}.
+          </span>
+        </li>
+        <li>
+          <span className="text-danger font-medium">
+            Worst case −${Number(s.max_loss_per_contract).toFixed(0)}
+          </span>
+          <span className="text-muted">
+            {isSpread
+              ? ' — capped by the bought put, no matter how far it falls.'
+              : ` if ${s.ticker} went to zero. You start losing below $${s.breakeven.toFixed(2)}.`}
+          </span>
+        </li>
+        <li className="text-muted">
+          Exit plan: buy it back at 50% of the credit, or close when 21 days remain — whichever first.
+        </li>
+      </ul>
+    </div>
+  );
+}
 
 function QualityBadge({ q }: { q: string | undefined }) {
   if (!q) return null;
@@ -79,10 +142,20 @@ export function ScreenCandidates({ candidates }: { candidates: CandidatePayload[
                     {c.setup ? 'TICKET STAGED' : 'NO SPREAD'}
                   </span>
                 </div>
-                {c.setup?.ticket ? (
-                  <pre className="mt-3 bg-bg border border-border rounded p-3 text-xs overflow-x-auto whitespace-pre-wrap">
-                    {c.setup.ticket}
-                  </pre>
+                {c.setup ? (
+                  <>
+                    <TradeInPlainEnglish s={c.setup} spot={c.last_price} />
+                    {c.setup.ticket && (
+                      <>
+                        <div className="mt-3 text-xs text-muted">
+                          The exact staged order (approve or reject in IBKR — never retype it):
+                        </div>
+                        <pre className="mt-1 bg-bg border border-border rounded p-3 text-xs overflow-x-auto whitespace-pre-wrap">
+                          {c.setup.ticket}
+                        </pre>
+                      </>
+                    )}
+                  </>
                 ) : (
                   <div className="mt-2 text-xs text-muted italic">
                     {c.skip_reason || 'No spread passed the gates (credit/friction/liquidity).'}
@@ -123,6 +196,8 @@ export function ScreenCandidates({ candidates }: { candidates: CandidatePayload[
                     </div>
                     {s && <QualityBadge q={s.data_quality} />}
                   </div>
+
+                  {s && <TradeInPlainEnglish s={s} spot={c.last_price} />}
 
                   {s ? (
                     <div className="mt-4 grid grid-cols-2 sm:grid-cols-6 gap-3 text-sm">
