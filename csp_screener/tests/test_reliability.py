@@ -107,6 +107,33 @@ def test_step_open_dedups_same_contract():
     assert len(virtual_tracker.get_open_virtual_trades()) == 1
 
 
+def test_json_safe_scrubs_non_finite_floats():
+    # Production incident Jul 9-13: the first zero-loss winning close made
+    # summaries.profit_factor = inf; Python json writes Infinity to the local
+    # journal fine, but PostgREST rejects the whole row — a week of screens
+    # never landed in Supabase. Every push payload must be scrubbed.
+    import json as _json
+    from csp_screener.supabase_sync import _json_safe
+
+    dirty = {
+        "profit_factor": float("inf"),
+        "expectancy": float("nan"),
+        "nested": {"pf": float("-inf"), "ok": 1.5},
+        "list": [1.0, float("inf"), {"x": float("nan")}],
+        "text": "unchanged", "int": 7, "none": None,
+    }
+    clean = _json_safe(dirty)
+    assert clean["profit_factor"] is None
+    assert clean["expectancy"] is None
+    assert clean["nested"]["pf"] is None
+    assert clean["nested"]["ok"] == 1.5
+    assert clean["list"][1] is None
+    assert clean["list"][2]["x"] is None
+    assert clean["text"] == "unchanged" and clean["int"] == 7
+    # The real assertion: strict JSON (what PostgREST enforces) accepts it
+    _json.dumps(clean, allow_nan=False)
+
+
 def test_open_stamps_entry_context_for_learning():
     # rv_percentile/vix at open feed the feature analyzer's vol-regime
     # buckets; without stamping, those learning dimensions never populate.

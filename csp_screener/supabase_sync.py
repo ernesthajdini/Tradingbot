@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 from datetime import datetime
 from typing import Optional
@@ -51,6 +52,25 @@ def _get_client():
 
 def is_enabled() -> bool:
     return _get_client() is not None
+
+
+def _json_safe(value):
+    """
+    Replace non-finite floats (inf/nan) with None, recursively.
+
+    Python's json module happily emits Infinity into the local JSONL journal,
+    but PostgREST's strict JSON encoder rejects the ENTIRE row. The first
+    zero-loss winning close made summaries.profit_factor = inf and silently
+    cost a week of screens rows before the CI verify gate went red. Every
+    push payload goes through this scrub.
+    """
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +112,9 @@ def push_screen(record: dict) -> bool:
             "recorded_at": record.get("recorded_at"),
         }
         # Use upsert on screen_id (the natural key) to be idempotent
-        client.table("screens").upsert(row, on_conflict="screen_id").execute()
+        client.table("screens").upsert(
+            _json_safe(row), on_conflict="screen_id"
+        ).execute()
         return True
     except Exception as e:
         logger.warning(f"Supabase push_screen failed: {e}")
@@ -145,7 +167,8 @@ def push_virtual_trade(record: dict) -> bool:
             "record_hash": record.get("record_hash"),
             "recorded_at": record.get("recorded_at"),
         }
-        # Strip Nones to keep payload small
+        # Scrub non-finite floats, then strip Nones to keep payload small
+        row = _json_safe(row)
         row = {k: v for k, v in row.items() if v is not None}
         try:
             client.table("virtual_trades").upsert(
@@ -198,7 +221,7 @@ def push_system_event(record: dict) -> bool:
             "payload": record,
             "recorded_at": record.get("recorded_at"),
         }
-        client.table("system_events").insert(row).execute()
+        client.table("system_events").insert(_json_safe(row)).execute()
         return True
     except Exception as e:
         logger.warning(f"Supabase push_system_event failed: {e}")
