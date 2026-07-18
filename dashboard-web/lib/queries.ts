@@ -44,6 +44,35 @@ export async function fetchRecentScreens(limit = 30, runType?: RunType): Promise
   return (data || []) as Screen[];
 }
 
+/**
+ * Credit-sanity quarantine — mirrors csp_screener/sanity.py exactly.
+ * Trades opened on garbage quotes (the LCID incident: deep-OTM delta with a
+ * deep-ITM premium from a misaligned yfinance row) are excluded from every
+ * dashboard read. Journal/DB rows are never mutated.
+ */
+const MAX_CSP_CREDIT_FRAC_OF_STRIKE = 0.12;
+const DEEP_OTM_DELTA = 0.15;
+const MAX_DEEP_OTM_CREDIT_FRAC = 0.05;
+const MAX_SPREAD_CREDIT_FRAC_OF_WIDTH = 0.9;
+
+function tradeIsSane(t: {
+  credit_received: number; strike: number;
+  delta_at_open?: number | null; long_strike?: number | null; structure?: string | null;
+}): boolean {
+  const credit = Number(t.credit_received);
+  const strike = Number(t.strike);
+  if (!(strike > 0) || !(credit > 0)) return false;
+  if ((t.structure === 'put_credit_spread') && t.long_strike != null) {
+    const width = (strike - Number(t.long_strike)) * 100;
+    return width > 0 && credit <= width * MAX_SPREAD_CREDIT_FRAC_OF_WIDTH;
+  }
+  const frac = credit / (strike * 100);
+  if (frac > MAX_CSP_CREDIT_FRAC_OF_STRIKE) return false;
+  const delta = t.delta_at_open != null ? Math.abs(Number(t.delta_at_open)) : null;
+  if (delta != null && delta < DEEP_OTM_DELTA && frac > MAX_DEEP_OTM_CREDIT_FRAC) return false;
+  return true;
+}
+
 export async function fetchOpenVirtualTrades(): Promise<OpenVirtualTrade[]> {
   const supabase = await createClient();
   const { data, error } = await supabase
@@ -54,7 +83,7 @@ export async function fetchOpenVirtualTrades(): Promise<OpenVirtualTrade[]> {
     console.error('fetchOpenVirtualTrades', error);
     return [];
   }
-  return (data || []) as OpenVirtualTrade[];
+  return ((data || []) as OpenVirtualTrade[]).filter(tradeIsSane);
 }
 
 export async function fetchClosedVirtualTrades(limit = 500): Promise<ClosedVirtualTrade[]> {
@@ -68,7 +97,7 @@ export async function fetchClosedVirtualTrades(limit = 500): Promise<ClosedVirtu
     console.error('fetchClosedVirtualTrades', error);
     return [];
   }
-  return (data || []) as ClosedVirtualTrade[];
+  return ((data || []) as ClosedVirtualTrade[]).filter(tradeIsSane);
 }
 
 export async function fetchRecentSystemEvents(limit = 30): Promise<SystemEvent[]> {

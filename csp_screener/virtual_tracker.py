@@ -200,16 +200,27 @@ def get_open_virtual_trades() -> list[OpenVirtualTrade]:
     A trade is open iff there's an OPEN event for trade_id without a matching
     CLOSE event.
     """
+    from csp_screener.sanity import open_event_is_sane
+
     events = journal.read_all("virtual_trades")
     open_ids = {}
+    quarantined = 0
     for ev in events:
         tid = ev.get("trade_id")
         if not tid:
             continue
         if ev.get("event") == "open":
+            # Retroactive quarantine: garbage-quote trades (LCID incident)
+            # are excluded from replay — never marked, never counted. The
+            # journal rows stay untouched (append-only).
+            if not open_event_is_sane(ev):
+                quarantined += 1
+                continue
             open_ids[tid] = ev
         elif ev.get("event") == "close":
             open_ids.pop(tid, None)
+    if quarantined:
+        logger.info(f"Quarantined {quarantined} open event(s) failing credit sanity")
 
     out = []
     for tid, ev in open_ids.items():

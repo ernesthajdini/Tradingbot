@@ -92,6 +92,8 @@ export interface OpenVirtualTrade {
   rv_percentile_at_open?: number | null;
   vix_at_open?: number | null;
   data_quality: string;
+  structure?: string | null;
+  long_strike?: number | null;
 }
 
 export interface ClosedVirtualTrade {
@@ -117,6 +119,8 @@ export interface ClosedVirtualTrade {
   final_put_price: number;
   pnl: number;
   pnl_pct_of_credit: number;
+  structure?: string | null;
+  long_strike?: number | null;
 }
 
 export interface SystemEvent {

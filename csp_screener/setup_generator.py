@@ -174,6 +174,15 @@ def generate_setup(
     credit_per_share = chosen_contract.mid
     credit_per_contract = credit_per_share * 100
     strike = chosen_contract.strike
+
+    # Credit-sanity gate: a garbage/misaligned quote (the LCID incident —
+    # deep-OTM delta with deep-ITM premium) must never become a setup.
+    from csp_screener.sanity import csp_credit_is_sane
+    sane, why = csp_credit_is_sane(credit_per_contract, strike, chosen_contract.delta)
+    if not sane:
+        logger.warning(f"{ticker}: setup rejected by credit-sanity gate — {why}")
+        return None
+
     max_loss_per_contract = (strike * 100) - credit_per_contract
     breakeven = strike - credit_per_share
 
@@ -326,6 +335,14 @@ def generate_spread_setup(
             break
 
         if long_leg is None:
+            continue
+
+        # Credit-sanity gate: net credit approaching/exceeding the strike
+        # width means a garbage or misaligned quote pair.
+        from csp_screener.sanity import spread_credit_is_sane
+        sane, why = spread_credit_is_sane(credit, short_leg.strike, long_leg.strike)
+        if not sane:
+            logger.warning(f"{ticker}: spread rejected by credit-sanity gate — {why}")
             continue
 
         breakeven = short_leg.strike - net_credit_share

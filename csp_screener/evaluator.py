@@ -84,11 +84,17 @@ def _reconstruct_closed_trades() -> list[dict]:
         elif ev.get("event") == "close":
             closes[tid] = ev
 
+    from csp_screener.sanity import open_event_is_sane
+
     out = []
     for tid, close_ev in closes.items():
         open_ev = opens.get(tid)
         if not open_ev:
             continue  # orphan close, skip
+        # Retroactive quarantine: trades opened on garbage quotes (LCID
+        # incident) are excluded from ALL stats and learning.
+        if not open_event_is_sane(open_ev):
+            continue
         merged = {**open_ev, **close_ev}  # close fields win
         merged["trade_id"] = tid
         out.append(merged)
