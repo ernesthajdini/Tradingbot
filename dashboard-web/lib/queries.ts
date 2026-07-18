@@ -122,7 +122,8 @@ export function computePerformance(trades: ClosedVirtualTrade[]) {
   if (trades.length === 0) {
     return {
       count: 0, wins: 0, losses: 0, winRate: 0,
-      totalPnl: 0, avgPnl: 0, avgWin: 0, avgLoss: 0,
+      totalPnl: 0, totalPnlPessimistic: 0, totalPnlEur: null as number | null,
+      avgPnl: 0, avgWin: 0, avgLoss: 0,
       profitFactor: 0, expectancy: 0,
       best: 0, worst: 0,
       byExitReason: {} as Record<string, { count: number; pnl: number }>,
@@ -135,6 +136,15 @@ export function computePerformance(trades: ClosedVirtualTrade[]) {
   const grossProfit = wins.reduce((a, b) => a + b, 0);
   const grossLoss = Math.abs(losses.reduce((a, b) => a + b, 0));
   const totalPnl = pnls.reduce((a, b) => a + b, 0);
+  // Pessimistic-band total: paper fills contain no slippage information, so
+  // the honest number is a band, not a point. Legacy rows without the band
+  // fall back to base pnl (band collapses for them — no invented friction).
+  const totalPnlPessimistic = trades.reduce(
+    (a, t) => a + Number(t.pnl_pessimistic ?? t.pnl ?? 0), 0);
+  // EUR scoreboard (playbook: the currency you eat with). Null when no
+  // trade carries a EUR conversion yet.
+  const eurVals = trades.map(t => t.pnl_eur).filter((v): v is number => v != null);
+  const totalPnlEur = eurVals.length ? eurVals.reduce((a, b) => a + Number(b), 0) : null;
 
   const byExit: Record<string, { count: number; pnl: number }> = {};
   const byTicker: Record<string, { trades: number; wins: number; pnl: number }> = {};
@@ -159,6 +169,8 @@ export function computePerformance(trades: ClosedVirtualTrade[]) {
     losses: losses.length,
     winRate,
     totalPnl,
+    totalPnlPessimistic,
+    totalPnlEur,
     avgPnl: totalPnl / trades.length,
     avgWin,
     avgLoss,

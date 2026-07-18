@@ -47,7 +47,7 @@ export default async function DailyPage() {
       )}
 
       {latest ? (
-        <ScreenCandidates candidates={candidates} />
+        <ScreenCandidates candidates={candidates} context="daily" />
       ) : (
         <div className="bg-panel border border-border rounded-lg p-8 text-center text-muted">
           No daily runs yet. The first one lands after the next market close

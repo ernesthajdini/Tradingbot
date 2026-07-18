@@ -294,6 +294,7 @@ def step_compute_open_positions_data(price_data: dict) -> list[dict]:
             "expiration": t.expiration.date().isoformat(),
             "dte_remaining": result["dte_remaining"],
             "credit_received": t.credit_received,
+            "max_loss": t.max_loss,
             "pnl_now": result["pnl"],
             "pnl_pct_now": result["pnl_pct_of_credit"],
             "tier": t.tier,
@@ -537,6 +538,9 @@ def run_weekly_screen(
         preview_path = None
         if not is_daily:
             week_label = now.strftime("Week of %Y-%m-%d")
+            # Risk-budget ledger for the email: what the playbook caps allow
+            # the reader to approve THIS week.
+            live_open = [p for p in open_positions if p.get("tier") == "live"]
             flags = {
                 "no_trade_week": no_trade_week,
                 "post_spike_window": post_spike,
@@ -547,6 +551,11 @@ def run_weekly_screen(
                 "closed_pnl": mark_summary["closed_pnl_total"],
                 "open_positions_count": len(open_positions),
                 "live_viable_count": len(live_viable),
+                "live_risk_open": sum(float(p.get("max_loss") or 0) for p in live_open),
+                "budget_cap": config.MAX_TOTAL_PREMIUM_AT_RISK,
+                "slots_used": len(live_open),
+                "slots_max": config.MAX_OPEN_POSITIONS,
+                "max_risk_per_spread": config.MAX_RISK_PER_SPREAD,
             }
             subject, html = notify.render_full_email(
                 week_label=week_label,

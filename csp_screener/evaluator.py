@@ -34,6 +34,10 @@ class PerformanceSummary:
     losses: int = 0
     win_rate: float = 0.0
     total_pnl: float = 0.0
+    # Band bound: paper P&L is always a [pessimistic, base] band, never a
+    # point (playbook change #3). Legacy trades without the field fall back
+    # to base pnl.
+    total_pnl_pessimistic: float = 0.0
     avg_pnl: float = 0.0
     avg_win: float = 0.0
     avg_loss: float = 0.0
@@ -54,6 +58,7 @@ class PerformanceSummary:
             "losses": self.losses,
             "win_rate": round(self.win_rate, 4),
             "total_pnl": round(self.total_pnl, 2),
+            "total_pnl_pessimistic": round(self.total_pnl_pessimistic, 2),
             "avg_pnl": round(self.avg_pnl, 2),
             "avg_win": round(self.avg_win, 2),
             "avg_loss": round(self.avg_loss, 2),
@@ -154,6 +159,11 @@ def compute_summary(period_days: Optional[int] = None, period_label: str = "") -
     summary.losses = len(losses)
     summary.win_rate = len(wins) / len(closed)
     summary.total_pnl = sum(pnls)
+    summary.total_pnl_pessimistic = sum(
+        float(t.get("pnl_pessimistic") if t.get("pnl_pessimistic") is not None
+              else (t.get("pnl", 0) or 0))
+        for t in closed
+    )
     summary.avg_pnl = float(np.mean(pnls)) if pnls else 0.0
     summary.avg_win = float(np.mean(wins)) if wins else 0.0
     summary.avg_loss = float(np.mean(losses)) if losses else 0.0

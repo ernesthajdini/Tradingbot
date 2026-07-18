@@ -3,7 +3,13 @@ import type { CandidatePayload, VirtualSetup } from '@/lib/types';
 /**
  * Shared two-tier candidate renderer used by /candidates (weekly) and
  * /daily (daily indications). Pure display — data fetching stays in pages.
+ *
+ * context='daily' de-emphasizes live tickets (informational read; the
+ * Sunday email is the acting signal).
  */
+
+// Display-only mirrors of config.py playbook caps (not tunable here)
+const MAX_RISK_PER_SPREAD = 130;
 
 function fmtExpiry(iso: string): { pretty: string; days: number } {
   const d = new Date(iso + 'T16:00:00'); // options expire at US market close
@@ -14,19 +20,50 @@ function fmtExpiry(iso: string): { pretty: string; days: number } {
   return { pretty, days };
 }
 
+/** "roughly 9 times in 10" phrasing from a win probability. */
+function oddsPhrase(p: number): { keep: string; lose: string } {
+  const denoms = [4, 5, 10, 20];
+  let best = { d: 10, k: Math.round(p * 10) };
+  let bestErr = Infinity;
+  for (const d of denoms) {
+    const k = Math.round(p * d);
+    const err = Math.abs(p - k / d);
+    if (k > 0 && k < d && err < bestErr) { bestErr = err; best = { d, k }; }
+  }
+  return {
+    keep: `${best.k} time${best.k === 1 ? '' : 's'} in ${best.d}`,
+    lose: `${best.d - best.k} time${best.d - best.k === 1 ? '' : 's'} in ${best.d}`,
+  };
+}
+
 /**
  * Plain-English "what exactly to trade" block. Every number comes straight
  * from the setup — this is a translation layer, not new math.
  */
-function TradeInPlainEnglish({ s, spot }: { s: VirtualSetup; spot: number }) {
+function TradeInPlainEnglish({
+  s, spot, tier,
+}: { s: VirtualSetup; spot: number; tier: 'live' | 'sandbox' }) {
   const { pretty, days } = fmtExpiry(s.expiration);
   const isSpread = s.structure === 'put_credit_spread' && s.long_strike != null;
   const credit = s.net_credit_after_friction ?? s.estimated_credit_per_contract;
+  const maxLoss = Number(s.max_loss_per_contract);
+  const isPaper = tier !== 'live';
+
+  // Odds: P(expires worthless) ≈ 1 - |delta| — the market's own estimate
+  const winP = s.delta != null ? 1 - Math.min(1, Math.abs(Number(s.delta))) : null;
+  const estimated = !s.data_quality?.startsWith('ibkr');
+  const odds = winP != null ? oddsPhrase(winP) : null;
+
+  const riskPctOfCap = Math.round((maxLoss / MAX_RISK_PER_SPREAD) * 100);
 
   return (
-    <div className="mt-3 rounded-lg border border-accent/40 bg-accent/5 p-4">
-      <div className="text-[11px] font-semibold uppercase tracking-wide text-accent mb-1">
-        The trade
+    <div className={`mt-3 rounded-lg border p-4 ${
+      isPaper ? 'border-border bg-border/10' : 'border-accent/40 bg-accent/5'
+    }`}>
+      <div className={`text-[11px] font-semibold uppercase tracking-wide mb-1 ${
+        isPaper ? 'text-muted' : 'text-accent'
+      }`}>
+        {isPaper ? 'The paper trade — research only, not for your account' : 'The trade'}
       </div>
       <div className="font-mono font-semibold text-base">
         {isSpread ? (
@@ -40,9 +77,29 @@ function TradeInPlainEnglish({ s, spot }: { s: VirtualSetup; spot: number }) {
       </div>
       <ul className="mt-2 text-sm space-y-1">
         <li>
-          <span className="text-success font-medium">You collect ≈ ${Number(credit).toFixed(0)}</span>
+          <span className={`font-medium ${isPaper ? 'text-muted' : 'text-success'}`}>
+            {isPaper ? `The model collects ≈ $${Number(credit).toFixed(0)} (virtual)` :
+              `You collect ≈ $${Number(credit).toFixed(0)}`}
+          </span>
           <span className="text-muted"> per contract, up front{isSpread ? ' (net, after costs)' : ''}.</span>
         </li>
+        {odds && winP != null && (
+          <li>
+            <span className="font-medium">≈ {Math.round(winP * 100)}% odds</span>
+            <span className="text-muted">
+              {' '}this expires worthless (read off the option&apos;s delta — the market&apos;s own
+              estimate, not a promise{estimated ? '; delta is estimated here, treat as rough' : ''}).
+              At those odds: keep ≈ ${Number(credit).toFixed(0)} about {odds.keep}; lose up to{' '}
+              ${maxLoss.toFixed(0)} about {odds.lose}.
+            </span>
+          </li>
+        )}
+        {!odds && (
+          <li className="text-warning text-xs">
+            Odds unknown — the data source gave no Greeks. Don&apos;t act on this one without
+            checking the chain in IBKR.
+          </li>
+        )}
         <li>
           <span className="font-medium">You win</span>
           <span className="text-muted">
@@ -52,18 +109,37 @@ function TradeInPlainEnglish({ s, spot }: { s: VirtualSetup; spot: number }) {
         </li>
         <li>
           <span className="text-danger font-medium">
-            Worst case −${Number(s.max_loss_per_contract).toFixed(0)}
+            Worst case −${maxLoss.toFixed(0)}
           </span>
           <span className="text-muted">
             {isSpread
-              ? ' — capped by the bought put, no matter how far it falls.'
+              ? ` — capped by the bought put (${riskPctOfCap}% of your $${MAX_RISK_PER_SPREAD} per-trade cap).`
               : ` if ${s.ticker} went to zero. You start losing below $${s.breakeven.toFixed(2)}.`}
           </span>
         </li>
         <li className="text-muted">
           Exit plan: buy it back at 50% of the credit, or close when 21 days remain — whichever first.
         </li>
+        {isPaper && (
+          <li className="text-xs text-warning">
+            Real CSPs at this account size are a playbook hard-no until ~$10K+. This exists to
+            build the track record.
+          </li>
+        )}
       </ul>
+    </div>
+  );
+}
+
+export function QualityLegend() {
+  return (
+    <div className="text-xs text-muted leading-relaxed">
+      <span className="font-medium text-text">Data badges: </span>
+      <span className="text-success">IBKR LIVE</span> = live broker quotes (trustworthy) ·{' '}
+      <span className="text-warning">yfinance+est</span> = free delayed data, Greeks estimated
+      (directional only) · <span className="text-danger">PREMIUM ONLY</span> = price known, no
+      Greeks · <span className="text-danger">LIQ?</span> = liquidity not verified — always open
+      the chain in IBKR before acting.
     </div>
   );
 }
@@ -92,77 +168,92 @@ function QualityBadge({ q }: { q: string | undefined }) {
   );
 }
 
-export function QualityLegend() {
-  return (
-    <div className="text-xs text-muted leading-relaxed">
-      <span className="font-medium text-text">Data badges: </span>
-      <span className="text-success">IBKR LIVE</span> = live broker quotes (trustworthy) ·{' '}
-      <span className="text-warning">yfinance+est</span> = free delayed data, Greeks estimated
-      (directional only) · <span className="text-danger">PREMIUM ONLY</span> = price known, no
-      Greeks · <span className="text-danger">LIQ?</span> = liquidity not verified — always open
-      the chain in IBKR before acting.
-    </div>
-  );
-}
-
-export function ScreenCandidates({ candidates }: { candidates: CandidatePayload[] }) {
+export function ScreenCandidates({
+  candidates, context = 'weekly',
+}: { candidates: CandidatePayload[]; context?: 'weekly' | 'daily' }) {
   const liveCands = candidates.filter(c => c.tier === 'live');
   const sandboxCands = candidates.filter(c => c.tier !== 'live');
   const liveViable = liveCands.filter(c => c.setup);
+  const isDaily = context === 'daily';
 
   return (
     <div className="space-y-8">
       <section>
-        <h2 className="text-lg font-medium text-success">
-          Real-money candidates — staged tickets
+        <h2 className={`text-lg font-medium ${isDaily ? '' : 'text-success'}`}>
+          {isDaily
+            ? 'Live-tier read (informational) — the Sunday email is your acting signal'
+            : 'Real-money candidates — staged tickets'}
           {liveViable.length === 0 && (
             <span className="ml-2 text-muted font-normal">· nothing qualified</span>
           )}
         </h2>
         <p className="text-xs text-muted mt-1 mb-3">
-          Liquid $20–60 names as defined-risk put credit spreads. Only shown when every gate
-          passed (net credit ≥ $25 after friction, friction ≤ 20%, live quotes). Your only move
-          in IBKR: approve or reject.
+          {isDaily
+            ? 'Same gates as Sunday, but prices are today’s close — by tomorrow’s open they are stale. Treat as a preview, not a ticket.'
+            : 'Liquid $20–60 names as defined-risk put credit spreads. Only shown when every gate passed (net credit ≥ $25 after friction, friction ≤ 20%, live quotes). Your only move in IBKR: approve or reject.'}
         </p>
         {liveCands.length === 0 ? (
           <div className="text-sm text-muted">No live-tier candidates recorded.</div>
         ) : (
           <div className="space-y-3">
-            {liveCands.map((c) => (
-              <div key={`${c.ticker}-${c.rank}`} className={`bg-panel border rounded-lg p-5 ${
-                c.setup ? 'border-success/60' : 'border-border'
-              }`}>
-                <div className="flex items-baseline justify-between">
-                  <span className="text-lg font-mono font-semibold">{c.ticker}
-                    <span className="ml-2 text-xs text-muted font-normal">
-                      ${c.last_price.toFixed(2)} · vol rank {Math.round(c.rv_percentile)}/100
+            {liveCands.map((c) => {
+              const viableIndex = liveViable.indexOf(c); // -1 if not viable
+              return (
+                <div key={`${c.ticker}-${c.rank}`} className={`bg-panel border rounded-lg p-5 ${
+                  c.setup && !isDaily ? 'border-success/60' : 'border-border'
+                }`}>
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-lg font-mono font-semibold">{c.ticker}
+                      <span className="ml-2 text-xs text-muted font-normal">
+                        ${c.last_price.toFixed(2)} · vol rank {Math.round(c.rv_percentile)}/100
+                      </span>
                     </span>
-                  </span>
-                  <span className="px-2 py-0.5 rounded text-[10px] font-semibold uppercase bg-success/20 text-success">
-                    {c.setup ? 'TICKET STAGED' : 'NO SPREAD'}
-                  </span>
-                </div>
-                {c.setup ? (
-                  <>
-                    <TradeInPlainEnglish s={c.setup} spot={c.last_price} />
-                    {c.setup.ticket && (
-                      <>
-                        <div className="mt-3 text-xs text-muted">
-                          The exact staged order (approve or reject in IBKR — never retype it):
-                        </div>
-                        <pre className="mt-1 bg-bg border border-border rounded p-3 text-xs overflow-x-auto whitespace-pre-wrap">
-                          {c.setup.ticket}
-                        </pre>
-                      </>
-                    )}
-                  </>
-                ) : (
-                  <div className="mt-2 text-xs text-muted italic">
-                    {c.skip_reason || 'No spread passed the gates (credit/friction/liquidity).'}
+                    <span className="inline-flex gap-1">
+                      {c.setup && viableIndex === 0 && !isDaily && (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-warning/25 text-warning">
+                          ★ Best pick
+                        </span>
+                      )}
+                      {c.setup && viableIndex > 0 && !isDaily && (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-semibold uppercase bg-border/50 text-muted">
+                          Backup #{viableIndex + 1}
+                        </span>
+                      )}
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                        c.setup ? 'bg-success/20 text-success' : 'bg-border/50 text-muted'
+                      }`}>
+                        {c.setup ? (isDaily ? 'QUALIFIED' : 'TICKET STAGED') : 'NO SPREAD'}
+                      </span>
+                    </span>
                   </div>
-                )}
-              </div>
-            ))}
+                  {c.setup && viableIndex > 0 && !isDaily && (
+                    <div className="mt-1 text-xs text-muted">
+                      Take only if the best pick won&apos;t fill at its limit — never both; the
+                      budget allows one.
+                    </div>
+                  )}
+                  {c.setup ? (
+                    <>
+                      <TradeInPlainEnglish s={c.setup} spot={c.last_price} tier="live" />
+                      {c.setup.ticket && !isDaily && (
+                        <>
+                          <div className="mt-3 text-xs text-muted">
+                            The exact staged order (approve or reject in IBKR — never retype it):
+                          </div>
+                          <pre className="mt-1 bg-bg border border-border rounded p-3 text-xs overflow-x-auto whitespace-pre-wrap">
+                            {c.setup.ticket}
+                          </pre>
+                        </>
+                      )}
+                    </>
+                  ) : (
+                    <div className="mt-2 text-xs text-muted italic">
+                      {c.skip_reason || 'No spread passed the gates (credit/friction/liquidity).'}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </section>
@@ -197,37 +288,13 @@ export function ScreenCandidates({ candidates }: { candidates: CandidatePayload[
                     {s && <QualityBadge q={s.data_quality} />}
                   </div>
 
-                  {s && <TradeInPlainEnglish s={s} spot={c.last_price} />}
+                  {s && <TradeInPlainEnglish s={s} spot={c.last_price} tier="sandbox" />}
 
                   {s ? (
-                    <div className="mt-4 grid grid-cols-2 sm:grid-cols-6 gap-3 text-sm">
-                      <div>
-                        <div className="text-xs text-muted">Contract</div>
-                        <div className="font-mono">${s.strike.toFixed(2)}P {s.expiration}</div>
-                      </div>
-                      <div>
-                        <div className="text-xs text-muted">Days to expiry</div>
-                        <div>{s.dte}d / {(s.pct_otm * 100).toFixed(1)}% OTM</div>
-                      </div>
-                      <div>
-                        <div className="text-xs text-muted">Credit (you receive)</div>
-                        <div className="text-success">${s.estimated_credit_per_contract.toFixed(2)}</div>
-                      </div>
-                      <div>
-                        <div className="text-xs text-muted">Max loss</div>
-                        <div className="text-danger">${s.max_loss_per_contract.toFixed(0)}</div>
-                      </div>
-                      <div>
-                        <div className="text-xs text-muted">Breakeven</div>
-                        <div>${s.breakeven.toFixed(2)}</div>
-                      </div>
-                      <div>
-                        <div className="text-xs text-muted">Δ / IV</div>
-                        <div>
-                          {s.delta != null ? s.delta.toFixed(2) : '?'} /{' '}
-                          {s.iv != null ? `${(s.iv * 100).toFixed(0)}%` : '?'}
-                        </div>
-                      </div>
+                    <div className="mt-3 text-xs text-muted">
+                      For the detail-inclined: Δ {s.delta != null ? s.delta.toFixed(2) : '?'} · IV{' '}
+                      {s.iv != null ? `${(s.iv * 100).toFixed(0)}%` : '?'} · open interest{' '}
+                      {s.open_interest} · breakeven ${s.breakeven.toFixed(2)}
                     </div>
                   ) : (
                     <div className="mt-4 text-sm text-muted italic">

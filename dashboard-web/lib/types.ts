@@ -94,6 +94,7 @@ export interface OpenVirtualTrade {
   data_quality: string;
   structure?: string | null;
   long_strike?: number | null;
+  tier?: 'live' | 'sandbox' | null;
 }
 
 export interface ClosedVirtualTrade {
@@ -121,6 +122,9 @@ export interface ClosedVirtualTrade {
   pnl_pct_of_credit: number;
   structure?: string | null;
   long_strike?: number | null;
+  tier?: 'live' | 'sandbox' | null;
+  pnl_pessimistic?: number | null;
+  pnl_eur?: number | null;
 }
 
 export interface SystemEvent {

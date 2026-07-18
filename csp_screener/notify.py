@@ -70,11 +70,32 @@ def _fmt_expiry(iso_date: str) -> tuple[str, int]:
         return iso_date, 0
 
 
-def _plain_action_html(setup: dict, ticker: str, last_price: float) -> str:
+def _odds_phrase(p: float) -> tuple[str, str]:
+    """('9 times in 10', '1 time in 10') phrasing for a win probability."""
+    best_d, best_k, best_err = 10, round(p * 10), 999.0
+    for d in (4, 5, 10, 20):
+        k = round(p * d)
+        err = abs(p - k / d)
+        if 0 < k < d and err < best_err:
+            best_d, best_k, best_err = d, k, err
+    lose = best_d - best_k
+    return (
+        f"{best_k} time{'s' if best_k != 1 else ''} in {best_d}",
+        f"{lose} time{'s' if lose != 1 else ''} in {best_d}",
+    )
+
+
+def _plain_action_html(
+    setup: dict,
+    ticker: str,
+    last_price: float,
+    tier: str = "sandbox",
+    max_risk_cap: Optional[float] = None,
+) -> str:
     """
     The 'what exactly to trade, in one glance' block. Pure translation of
-    the setup's existing numbers into sentences — no new math except the
-    display-only return-on-risk ratio.
+    the setup's existing numbers into sentences — no new math except
+    display-only ratios and the odds read off the delta.
     """
     pretty, days = _fmt_expiry(setup["expiration"])
     is_spread = (setup.get("structure") == "put_credit_spread"
@@ -82,15 +103,19 @@ def _plain_action_html(setup: dict, ticker: str, last_price: float) -> str:
     credit = setup.get("net_credit_after_friction") or setup["estimated_credit_per_contract"]
     max_loss = setup["max_loss_per_contract"]
     strike = setup["strike"]
+    is_paper = tier != "live"
 
     if is_spread:
         headline = (
             f"SELL the ${strike:.2f} put &nbsp;+&nbsp; "
             f"BUY the ${setup['long_strike']:.2f} put"
         )
+        cap_note = ""
+        if max_risk_cap:
+            cap_note = f" ({max_loss / max_risk_cap:.0%} of your ${max_risk_cap:.0f} per-trade cap)"
         worst = (
             f"<b style='color:#cf222e;'>Worst case &minus;${max_loss:.0f}</b> "
-            f"— capped by the bought put, no matter how far it falls."
+            f"— capped by the bought put, no matter how far it falls{cap_note}."
         )
         collect_note = " (net, after costs)"
     else:
@@ -102,11 +127,52 @@ def _plain_action_html(setup: dict, ticker: str, last_price: float) -> str:
         )
         collect_note = ""
 
+    # Odds: P(expires worthless) ≈ 1 - |delta| — the market's own estimate
+    delta = setup.get("delta")
+    if delta is not None:
+        win_p = 1.0 - min(1.0, abs(float(delta)))
+        keep_ph, lose_ph = _odds_phrase(win_p)
+        est_note = ("; delta is estimated here — treat as rough"
+                    if not str(setup.get("data_quality", "")).startswith("ibkr") else "")
+        odds_html = (
+            f"<b>≈ {win_p*100:.0f}% odds</b> this expires worthless "
+            f"(read off the option's delta — the market's own estimate, not a "
+            f"promise{est_note}). At those odds: keep ≈ ${credit:.0f} about "
+            f"{keep_ph}; lose up to ${max_loss:.0f} about {lose_ph}.<br>"
+        )
+    else:
+        odds_html = (
+            "<b style='color:#bf8700;'>Odds unknown</b> — the data source gave "
+            "no Greeks. Don't act on this one without checking the chain in IBKR.<br>"
+        )
+
+    if is_paper:
+        box_style = "background:#f6f8fa;border:1px solid #d0d7de;"
+        title = "The paper trade — research only, not for your account"
+        title_color = "#6e7781"
+        collect_html = (
+            f"<span style='color:#57606a;font-weight:600;'>The model collects "
+            f"≈ ${credit:.0f} (virtual)</span> per contract{collect_note}."
+        )
+        paper_note = (
+            "<br><span style='color:#bf8700;font-size:12px;'>Real CSPs at this "
+            "account size are a playbook hard-no until ~$10K+. This exists to "
+            "build the track record.</span>"
+        )
+    else:
+        box_style = "background:#f0f6ff;border:1px solid #a5c9ff;"
+        title = "The trade"
+        title_color = "#0969da"
+        collect_html = (
+            f"<span style='color:#2da44e;font-weight:600;'>You collect ≈ "
+            f"${credit:.0f}</span> per contract, up front{collect_note}."
+        )
+        paper_note = ""
+
     return f"""
-    <div style="margin-top:8px;padding:12px 14px;background:#f0f6ff;
-                border:1px solid #a5c9ff;border-radius:8px;">
-      <div style="font-size:10px;font-weight:700;letter-spacing:1px;color:#0969da;
-                  text-transform:uppercase;margin-bottom:4px;">The trade</div>
+    <div style="margin-top:8px;padding:12px 14px;{box_style}border-radius:8px;">
+      <div style="font-size:10px;font-weight:700;letter-spacing:1px;color:{title_color};
+                  text-transform:uppercase;margin-bottom:4px;">{title}</div>
       <div style="font-size:15px;font-weight:700;font-family:monospace;">
         {headline}
         <span style="font-weight:400;font-family:sans-serif;color:#57606a;font-size:13px;">
@@ -114,13 +180,13 @@ def _plain_action_html(setup: dict, ticker: str, last_price: float) -> str:
         </span>
       </div>
       <div style="font-size:13px;margin-top:8px;line-height:1.7;">
-        <span style="color:#2da44e;font-weight:600;">You collect ≈ ${credit:.0f}</span>
-        per contract, up front{collect_note}.<br>
+        {collect_html}<br>
+        {odds_html}
         <b>You win</b> if {escape(ticker)} stays above <b>${strike:.2f}</b> through {pretty}
         — the strike is {setup['pct_otm']*100:.0f}% below today's ${last_price:.2f}.<br>
         {worst}<br>
         <span style="color:#57606a;">Exit plan: buy back at 50% of the credit,
-        or close when 21 days remain — whichever comes first.</span>
+        or close when 21 days remain — whichever comes first.</span>{paper_note}
       </div>
     </div>"""
 
@@ -196,13 +262,17 @@ def render_performance_section(summaries: dict[str, PerformanceSummary]) -> str:
             )
         else:
             pnl_color = _pnl_color(s.total_pnl)
+            pess = getattr(s, "total_pnl_pessimistic", s.total_pnl)
             body = f"""
-            <div style="font-size:24px;font-weight:600;color:{pnl_color};">
-              ${s.total_pnl:+.2f}
+            <div style="font-size:22px;font-weight:600;color:{pnl_color};">
+              ${pess:+.2f} <span style="font-size:14px;color:#6e7781;">to</span> ${s.total_pnl:+.2f}
+            </div>
+            <div style="font-size:10px;color:#6e7781;">
+              pessimistic ↔ base fills — the truth is inside this band
             </div>
             <div style="margin-top:6px;font-size:13px;">
               <b>{s.closed_count}</b> trades • <b>{s.win_rate*100:.0f}%</b> win
-              <br>Avg ${s.avg_pnl:+.2f}/trade • PF {s.profit_factor:.2f}
+              <br>Avg win ${s.avg_win:+.2f} vs loss ${s.avg_loss:+.2f}
               <br>Best ${s.best_trade:+.2f} • Worst ${s.worst_trade:+.2f}
             </div>"""
         cards.append(f"""
@@ -284,8 +354,13 @@ def render_insights_section(recommendations: list) -> str:
     return "".join(rows)
 
 
-def render_live_section(live_candidates: list[dict], no_trade_week: bool) -> str:
+def render_live_section(
+    live_candidates: list[dict],
+    no_trade_week: bool,
+    flags: Optional[dict] = None,
+) -> str:
     """LIVE tier: put credit spreads with staged order tickets."""
+    flags = flags or {}
     if no_trade_week or not any(c.get("setup") for c in live_candidates):
         return (
             "<div style='padding:16px;background:#ddf4ff;border:1px solid #54aeff;"
@@ -296,6 +371,7 @@ def render_live_section(live_candidates: list[dict], no_trade_week: bool) -> str
             "not a failure.</div>"
         )
     blocks = []
+    viable_seen = 0
     for c in live_candidates:
         s = c.get("setup")
         if not s:
@@ -305,6 +381,17 @@ def render_live_section(live_candidates: list[dict], no_trade_week: bool) -> str
                 f"{escape(c['ticker'])}: <i>{escape(reason)}</i></div>"
             )
             continue
+        viable_seen += 1
+        if viable_seen == 1:
+            pick_badge = _badge("★ BEST PICK", "#bf8700")
+            backup_note = ""
+        else:
+            pick_badge = _badge(f"BACKUP #{viable_seen}", "#6e7781")
+            backup_note = (
+                "<div style='font-size:12px;color:#6e7781;margin-top:4px;'>"
+                "Take only if the best pick won't fill at its limit — never "
+                "both; the budget allows one.</div>"
+            )
         ticket = escape(s.get("ticket") or "")
         blocks.append(f"""
         <div style="border:2px solid #2da44e;border-radius:8px;padding:14px;margin:10px 0;">
@@ -314,10 +401,21 @@ def render_live_section(live_candidates: list[dict], no_trade_week: bool) -> str
                 ${c['last_price']:.2f} · vol rank {c.get('rv_percentile', 0):.0f}/100
               </span>
             </span>
-            {_badge('PUT CREDIT SPREAD', '#2da44e')} {_quality_badge(s.get('data_quality', ''))}
+            <span>{pick_badge} {_badge('PUT CREDIT SPREAD', '#2da44e')} {_quality_badge(s.get('data_quality', ''))}</span>
           </div>
-          {_plain_action_html(s, c['ticker'], c['last_price'])}
-          <div style="font-size:11px;color:#6e7781;margin-top:10px;">
+          {backup_note}
+          {_plain_action_html(s, c['ticker'], c['last_price'], tier='live',
+                              max_risk_cap=flags.get('max_risk_per_spread'))}
+          <div style="font-size:12px;margin-top:10px;padding:8px 10px;background:#fff8c5;
+                      border-radius:6px;">
+            <b>WHEN:</b> place it Monday, but not in the first 30 minutes after the
+            US open (spreads are widest then). These prices are Friday's close —
+            check the live mid in IBKR first: if it's dropped more than a couple of
+            cents below the staged credit, the edge is gone. Chase at most 1 tick;
+            walking away unfilled is the plan working, not a miss. The GTC exits go
+            in with the same order.
+          </div>
+          <div style="font-size:11px;color:#6e7781;margin-top:8px;">
             The exact staged order (approve or reject in IBKR — never retype it):
           </div>
           <pre style="background:#f6f8fa;border-radius:6px;padding:10px;margin:4px 0;
@@ -356,11 +454,33 @@ def render_bottom_line(flags: dict) -> str:
         + (f" (${closed_pnl:+.2f})" if closed else "")
         + f" · {n_open} position(s) currently open."
     )
+
+    # Risk-budget ledger: what the playbook caps allow the reader to approve
+    budget_html = ""
+    if flags.get("budget_cap"):
+        cap = flags["budget_cap"]
+        used = flags.get("live_risk_open", 0.0)
+        slots_used = flags.get("slots_used", 0)
+        slots_max = flags.get("slots_max", 2)
+        per_trade = flags.get("max_risk_per_spread", 130)
+        slots_free = max(0, slots_max - slots_used)
+        budget_free = max(0.0, cap - used)
+        max_approvals = min(slots_free, int(budget_free // per_trade)) if per_trade else 0
+        budget_html = f"""
+      <div style="font-size:13px;margin-top:10px;padding:8px 12px;background:#ffffffaa;
+                  border-radius:6px;">
+        <b>RISK BUDGET</b> — ${used:.0f} of ${cap:.0f} in use · {slots_used} of
+        {slots_max} position slots filled.
+        {'This week you can approve AT MOST ' + str(max_approvals) + ' ticket(s) (~$' + format(per_trade, '.0f') + ' risk each). Approving more breaks the playbook cap.'
+         if n_live > 0 else 'Nothing new to approve this week.'}
+      </div>"""
+
     return f"""
     <div style="padding:16px;margin:16px 0;background:{bg};border:2px solid {border};
                 border-radius:8px;">
       <div style="font-size:16px;font-weight:700;">{headline}</div>
       <div style="font-size:13px;color:#57606a;margin-top:6px;">{sub}</div>
+      {budget_html}
       <div style="font-size:12px;color:#6e7781;margin-top:8px;">{activity}</div>
     </div>"""
 
@@ -390,11 +510,19 @@ def render_full_email(
     """Return (subject, html_body). Two-tier layout: LIVE on top, sandbox below."""
     flags = flags or {}
     live_candidates = live_candidates or []
-    n_live = sum(1 for c in live_candidates if c.get("setup"))
-    if flags.get("no_trade_week"):
-        subject = f"[CSP Screener] {week_label} — NO TRADE (sandbox: {len(candidates)})"
+    viable = [c for c in live_candidates if c.get("setup")]
+    n_live = len(viable)
+    if flags.get("no_trade_week") or n_live == 0:
+        subject = f"[CSP Screener] {week_label} — NOTHING TO DO (no trade qualified)"
     else:
-        subject = f"[CSP Screener] {week_label} — {n_live} live ticket(s), {len(candidates)} sandbox"
+        best = viable[0]
+        s = best["setup"]
+        credit = s.get("net_credit_after_friction") or s["estimated_credit_per_contract"]
+        others = f", {n_live - 1} backup(s)" if n_live > 1 else ""
+        subject = (
+            f"[CSP Screener] {week_label} — TAKE {best['ticker']} "
+            f"(${credit:.0f} credit, ${s['max_loss_per_contract']:.0f} risk){others}"
+        )
 
     health_html = ""
     if health.get("warnings"):
@@ -430,7 +558,7 @@ def render_full_email(
             f"the scoreboard that matters is EUR.</div>"
         )
 
-    live_html = render_live_section(live_candidates, flags.get("no_trade_week", False))
+    live_html = render_live_section(live_candidates, flags.get("no_trade_week", False), flags)
     candidates_html = render_candidates_section(candidates)
     perf_html = render_performance_section(summaries)
     open_html = render_open_positions_section(open_positions)

@@ -33,6 +33,13 @@ export default async function DashboardPage() {
     };
   });
 
+  // Decision state: does the latest WEEKLY screen have anything to act on?
+  const latestIsWeekly = latest?.run_type !== 'daily';
+  const liveViable = latestIsWeekly ? (latest?.live_viable ?? 0) : 0;
+  const liveRiskOpen = openTrades
+    .filter(t => t.tier === 'live')
+    .reduce((s, t) => s + (Number(t.max_loss) || 0), 0);
+
   return (
     <div className="space-y-8">
       <div>
@@ -42,6 +49,24 @@ export default async function DashboardPage() {
         </p>
       </div>
 
+      {latest && (
+        <a href="/candidates" className={`block rounded-lg border-2 p-4 transition-colors ${
+          liveViable > 0
+            ? 'border-success/60 bg-success/5 hover:bg-success/10'
+            : 'border-accent/50 bg-accent/5 hover:bg-accent/10'
+        }`}>
+          <div className="font-semibold">
+            {liveViable > 0
+              ? `✅ ${liveViable} ticket(s) waiting for approve/reject — see Weekly.`
+              : '🚫 Nothing to do — no real-money trade currently qualified.'}
+          </div>
+          <div className="text-xs text-muted mt-1">
+            Live risk in use: ${liveRiskOpen.toFixed(0)} of $200 budget ·{' '}
+            {openTrades.filter(t => t.tier === 'live').length} of 2 live slots
+          </div>
+        </a>
+      )}
+
       <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <MetricCard
           label="Open virtual positions"
@@ -50,18 +75,23 @@ export default async function DashboardPage() {
         <MetricCard
           label="Closed virtual trades"
           value={allTime.count}
-          sub={last30.count ? `${last30.count} last 30d` : undefined}
+          sub={allTime.count < 30 ? 'under 30 — noise, not signal' :
+            (last30.count ? `${last30.count} last 30d` : undefined)}
         />
         <MetricCard
           label="All-time P&L"
           value={`$${allTime.totalPnl.toFixed(2)}`}
           trend={allTime.totalPnl > 0 ? 'up' : allTime.totalPnl < 0 ? 'down' : 'neutral'}
-          sub={last30.count ? `$${last30.totalPnl.toFixed(2)} last 30d` : undefined}
+          sub={allTime.count
+            ? `as low as $${allTime.totalPnlPessimistic.toFixed(2)} at pessimistic fills`
+            : undefined}
         />
         <MetricCard
           label="Win rate"
           value={allTime.count ? `${(allTime.winRate * 100).toFixed(0)}%` : '—'}
-          sub={allTime.count ? `${allTime.wins}W / ${allTime.losses}L` : undefined}
+          sub={allTime.count
+            ? `avg win $${allTime.avgWin.toFixed(0)} vs loss $${allTime.avgLoss.toFixed(0)} — expectancy is the scoreboard`
+            : undefined}
         />
       </section>
 

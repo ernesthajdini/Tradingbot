@@ -18,20 +18,37 @@ function PeriodCard({ label, perf }: { label: string; perf: ReturnType<typeof co
           <div className={`text-2xl font-semibold ${
             perf.totalPnl > 0 ? 'text-success' : perf.totalPnl < 0 ? 'text-danger' : ''
           }`}>
+            ${perf.totalPnlPessimistic.toFixed(2)}
+            <span className="text-muted font-normal text-lg"> to </span>
             ${perf.totalPnl.toFixed(2)}
           </div>
+          <div className="text-[11px] text-muted mt-0.5">
+            pessimistic ↔ base fills — the truth is somewhere inside; paper fills contain no
+            slippage information
+          </div>
+          {perf.totalPnlEur != null && (
+            <div className="text-xs text-muted mt-0.5">
+              ≈ €{perf.totalPnlEur.toFixed(2)} at trade-date rates (the scoreboard that matters)
+            </div>
+          )}
           <div className="mt-2 text-sm space-y-0.5">
             <div className="text-muted">
               <span className="text-text">{perf.count}</span> trades ·{' '}
               <span className="text-text">{(perf.winRate * 100).toFixed(0)}%</span> win
             </div>
             <div className="text-muted">
-              Avg ${perf.avgPnl.toFixed(2)} · PF {perf.profitFactor === Infinity ? '∞' : perf.profitFactor.toFixed(2)}
+              Avg win ${perf.avgWin.toFixed(2)} vs avg loss ${perf.avgLoss.toFixed(2)} ·
+              expectancy ${perf.expectancy.toFixed(2)}/trade
             </div>
             <div className="text-muted">
               Best ${perf.best.toFixed(2)} · Worst ${perf.worst.toFixed(2)}
             </div>
           </div>
+          {perf.count < 30 && (
+            <div className="mt-2 text-[11px] text-warning">
+              Fewer than 30 closed trades — treat every number here as noise, not signal.
+            </div>
+          )}
         </>
       )}
     </div>
