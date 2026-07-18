@@ -25,6 +25,11 @@ from csp_screener.options_data import OptionsChain, OptionContract
 
 logger = logging.getLogger(__name__)
 
+# Hard cap on |delta| for a CSP candidate — the playbook trades 25-30 delta;
+# anything above 0.40 is a rule-breaking near-ATM/ITM selection, not a
+# candidate. (Structural bound, deliberately outside config.py's cooldown.)
+MAX_CSP_DELTA = 0.40
+
 
 @dataclass
 class VirtualSetup:
@@ -94,6 +99,16 @@ def _pick_best_put(
     oi_known = any(c.open_interest > 0 for c in quoted)
 
     def passes(c: OptionContract) -> bool:
+        # Rule enforcement (BB incident: sold a $12 put on an $11.10 stock at
+        # delta -0.53 against a 0.30 target because nothing forbade it).
+        # A cash-secured put candidate must be OUT of the money, and the
+        # playbook's spec is "short leg 25-30 delta" — cap hard at 0.40.
+        # Constants live here, not config.py (structural rule bounds, like
+        # sanity.py — not tunable strategy thresholds).
+        if c.strike >= spot:
+            return False  # never sell ITM/ATM
+        if c.delta is not None and abs(c.delta) > MAX_CSP_DELTA:
+            return False
         has_live_quote = c.bid > 0 and c.ask > 0
         if has_live_quote:
             if c.bid_ask_spread_pct > config.MAX_BID_ASK_PCT_OF_MID:

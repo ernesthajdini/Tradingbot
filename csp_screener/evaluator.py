@@ -125,12 +125,17 @@ def _filter_by_period(trades: list[dict], days: Optional[int]) -> list[dict]:
 
 def compute_summary(period_days: Optional[int] = None, period_label: str = "") -> PerformanceSummary:
     """Compute summary metrics for closed virtual trades in the given period."""
+    from csp_screener.sanity import open_event_is_sane
+
     all_closed = _reconstruct_closed_trades()
     closed = _filter_by_period(all_closed, period_days)
     closed_ids = {c["trade_id"] for c in all_closed}
+    # Same sanity gate as the closed-trade join — otherwise quarantined
+    # opens are counted as "open positions" forever.
     open_count = len([t for t in journal.read_all("virtual_trades")
                       if t.get("event") == "open"
-                      and t["trade_id"] not in closed_ids])
+                      and t["trade_id"] not in closed_ids
+                      and open_event_is_sane(t)])
 
     if not period_label:
         period_label = f"last {period_days}d" if period_days else "all-time"

@@ -320,7 +320,11 @@ def evaluate_open_position(
     sigma = current_iv
     if trade.iv_at_open:
         try:
-            iv_open = float(trade.iv_at_open)
+            # Clamp legacy/garbage open IVs (the LCID zombie carried IV 4.85,
+            # which priced the put down so fast the mark minted a fake +54%
+            # "take-profit win" on day one). 2.5 is above any legit squeeze
+            # IV seen in this universe.
+            iv_open = min(float(trade.iv_at_open), 2.5)
             if iv_open > 0:
                 sigma = 0.5 * current_iv + 0.5 * iv_open
         except (ValueError, TypeError):

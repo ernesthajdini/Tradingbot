@@ -41,6 +41,8 @@ class OptionContract:
     iv: Optional[float]      # implied vol (annualized, e.g. 0.45 = 45%)
     delta: Optional[float]   # signed (puts are negative)
     source: str = "unknown"  # "ibkr" or "yfinance"
+    last_trade_date: Optional[datetime] = None  # zombie-row detection
+    contract_symbol: Optional[str] = None       # adjusted-root detection (stored only)
 
     @property
     def bid_ask_spread_pct(self) -> float:
@@ -87,6 +89,90 @@ def fetch_chain(ticker: str, spot_price: float, ibkr_client=None) -> Optional[Op
         return None
 
 
+# ---------------------------------------------------------------------------
+# Zombie-row defense (the LCID root cause)
+# ---------------------------------------------------------------------------
+# yfinance chains can interleave FRESH rows with "zombie" rows whose two-sided
+# bid/ask froze months ago (LCID: a 3.5P quoted 1.73/1.78 since Aug-2025 —
+# pre-reverse-split pricing — next to fresh rows implying it was worth ~$0.24).
+# The zombie's own solved IV makes price+IV+estimated-delta SELF-CONSISTENT
+# garbage, so no internal BS check can catch it. The kills below are
+# deterministic and use only data already in the DataFrame.
+
+MAX_QUOTE_AGE_DAYS = 7          # weekend/holiday staleness is 2-3 days; zombies are months
+MONOTONICITY_MATERIALITY = 2.0  # a put priced >2x a fresh HIGHER-strike put is impossible
+MONOTONICITY_TICK = 0.05        # ...plus a tick, so penny chains don't false-alarm
+MAX_ACCEPTED_IV = 3.0           # above 300% IV, null iv+delta (severs the garbage loop)
+
+
+def _filter_zombie_puts(
+    contracts: list[OptionContract],
+    now: Optional[datetime] = None,
+) -> tuple[list[OptionContract], list[str]]:
+    """
+    Pure function: (kept, dropped_reasons). Three additive checks:
+
+    1. Staleness: drop rows whose last trade is > MAX_QUOTE_AGE_DAYS old.
+       Rows with NO last_trade_date are KEPT (never let a missing column
+       blank a chain) — downstream stale-quote warnings still apply.
+    2. Put-price monotonicity: a put can never be worth much more than a
+       put at a HIGHER strike (same expiry). Drop any row whose mid exceeds
+       a FRESH higher-strike row's mid by more than MONOTONICITY_MATERIALITY
+       x (+ a tick). Live WEN/RIVN chains show harmless $0.01-0.07 penny
+       violations — the materiality factor keeps those.
+    3. IV hygiene: rows with IV > MAX_ACCEPTED_IV keep their price but lose
+       iv AND estimated delta (delta derived from garbage IV is garbage).
+    """
+    now = now or datetime.now()
+    dropped: list[str] = []
+
+    fresh: list[OptionContract] = []
+    for c in contracts:
+        if c.last_trade_date is not None:
+            age = (now.date() - c.last_trade_date.date()).days
+            if age > MAX_QUOTE_AGE_DAYS:
+                dropped.append(
+                    f"{c.ticker} {c.strike:g}P {c.expiration.date()}: zombie row — "
+                    f"last trade {age}d ago"
+                )
+                continue
+        fresh.append(c)
+
+    # Monotonicity vs rows that passed staleness AND have a dated recent trade
+    dated_fresh = [c for c in fresh if c.last_trade_date is not None]
+    kept: list[OptionContract] = []
+    for c in fresh:
+        higher_fresh = [
+            h for h in dated_fresh
+            if h.expiration.date() == c.expiration.date()
+            and h.strike > c.strike and h.mid > 0 and h is not c
+        ]
+        violation = next(
+            (h for h in higher_fresh
+             if c.mid > h.mid * MONOTONICITY_MATERIALITY + MONOTONICITY_TICK),
+            None,
+        )
+        if violation is not None:
+            dropped.append(
+                f"{c.ticker} {c.strike:g}P {c.expiration.date()}: price "
+                f"${c.mid:.2f} > {MONOTONICITY_MATERIALITY:g}x the fresh "
+                f"${violation.strike:g}P at ${violation.mid:.2f} — arbitrage-impossible"
+            )
+            continue
+        kept.append(c)
+
+    for c in kept:
+        if c.iv is not None and c.iv > MAX_ACCEPTED_IV:
+            dropped.append(
+                f"{c.ticker} {c.strike:g}P: IV {c.iv:.2f} > {MAX_ACCEPTED_IV:g} — "
+                f"iv/delta nulled (price kept)"
+            )
+            c.iv = None
+            c.delta = None
+
+    return kept, dropped
+
+
 def _fetch_yfinance(ticker: str, spot_price: float) -> Optional[OptionsChain]:
     """Fetch option chain from yfinance. Greeks/IV may be missing or stale."""
     import yfinance as yf
@@ -121,6 +207,7 @@ def _fetch_yfinance(ticker: str, spot_price: float) -> Optional[OptionsChain]:
     for exp in candidate_exps:
         try:
             oc = t.option_chain(exp.strftime("%Y-%m-%d"))
+            exp_puts: list[OptionContract] = []
             for _, row in oc.puts.iterrows():
                 # NaN-safe extraction. NOTE: `NaN or 0` does NOT work — NaN is
                 # truthy, so int(NaN) raised and silently dropped the whole
@@ -131,8 +218,20 @@ def _fetch_yfinance(ticker: str, spot_price: float) -> Optional[OptionsChain]:
                 mid = (bid + ask) / 2 if (bid > 0 and ask > 0) else last
                 iv = row.get("impliedVolatility")
                 iv = float(iv) if (pd.notna(iv) and iv) else None
+                ltd = row.get("lastTradeDate")
+                try:
+                    ltd = (pd.Timestamp(ltd).tz_localize(None).to_pydatetime()
+                           if pd.notna(ltd) else None)
+                except (TypeError, ValueError):
+                    # already tz-naive or unparseable
+                    try:
+                        ltd = pd.Timestamp(ltd).to_pydatetime() if pd.notna(ltd) else None
+                    except (TypeError, ValueError):
+                        ltd = None
+                sym = row.get("contractSymbol")
+                sym = str(sym) if pd.notna(sym) else None
 
-                chain.puts.append(OptionContract(
+                exp_puts.append(OptionContract(
                     ticker=ticker,
                     expiration=exp,
                     strike=float(row["strike"]),
@@ -146,7 +245,14 @@ def _fetch_yfinance(ticker: str, spot_price: float) -> Optional[OptionsChain]:
                     iv=iv,
                     delta=_estimate_put_delta(spot_price, float(row["strike"]), exp, iv),
                     source="yfinance",
+                    last_trade_date=ltd,
+                    contract_symbol=sym,
                 ))
+
+            kept, dropped = _filter_zombie_puts(exp_puts)
+            for reason in dropped:
+                logger.warning(f"zombie-row filter: {reason}")
+            chain.puts.extend(kept)
         except Exception as e:
             logger.debug(f"yfinance chain parse failed for {ticker} {exp}: {e}")
 

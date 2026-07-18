@@ -9,14 +9,21 @@ few cents, and the resulting position churned fake +$77 "take-profit wins"
 into the track record daily. A 100% win rate built on one broken quote.
 
 The rules here are deliberately crude and generous — they only need to
-catch order-of-magnitude garbage, not price options:
+catch order-of-magnitude garbage, not price options. They are a BACKSTOP:
+the primary defense is the zombie-row filter in options_data.py
+(staleness + put-price monotonicity + IV hygiene), which kills garbage
+rows deterministically at the parser. Do not re-tighten these caps to do
+the parser's job.
 
-  - A short-dated OTM put's premium is a small fraction of its strike.
-    Even a 150%-IV meme stock at 30-delta / 45 DTE prices under ~10% of
-    strike. We cap at 12%.
-  - If the row itself claims deep OTM (|delta| < 0.15), the bound tightens
-    to 5% of strike — a self-contradicting row (tiny delta, fat premium)
-    is the exact LCID signature.
+Calibration (verified against a Black-Scholes grid + live market data —
+the sandbox screens for 100th-percentile realized-vol names, so the caps
+must pass genuinely fat premiums):
+  - A fair 30-delta / 45-DTE put at IV 150% prices at ~15.7% of strike.
+    Cap at 20%.
+  - A fair deep-OTM (|delta| < 0.15) put at IV 130-150% prices at ~5-8%
+    of strike. Cap at 8% — the LCID zombie ($1.755 on a $3.50 strike =
+    50%) is still caught by an order of magnitude, while LCID's REAL
+    post-squeeze price (~7% of strike at delta -0.10) passes.
   - A put credit spread's net credit can never exceed the width between
     strikes; above 90% of width is garbage.
 
@@ -40,10 +47,10 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # Max credible credit as a fraction of strike value for a short OTM put
-MAX_CSP_CREDIT_FRAC_OF_STRIKE = 0.12
+MAX_CSP_CREDIT_FRAC_OF_STRIKE = 0.20
 # Tighter bound when the row itself says deep OTM
 DEEP_OTM_DELTA = 0.15
-MAX_DEEP_OTM_CREDIT_FRAC = 0.05
+MAX_DEEP_OTM_CREDIT_FRAC = 0.08
 # A spread's net credit cannot approach the strike width
 MAX_SPREAD_CREDIT_FRAC_OF_WIDTH = 0.90
 

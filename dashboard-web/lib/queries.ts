@@ -50,9 +50,9 @@ export async function fetchRecentScreens(limit = 30, runType?: RunType): Promise
  * deep-ITM premium from a misaligned yfinance row) are excluded from every
  * dashboard read. Journal/DB rows are never mutated.
  */
-const MAX_CSP_CREDIT_FRAC_OF_STRIKE = 0.12;
+const MAX_CSP_CREDIT_FRAC_OF_STRIKE = 0.20;
 const DEEP_OTM_DELTA = 0.15;
-const MAX_DEEP_OTM_CREDIT_FRAC = 0.05;
+const MAX_DEEP_OTM_CREDIT_FRAC = 0.08;
 const MAX_SPREAD_CREDIT_FRAC_OF_WIDTH = 0.9;
 
 function tradeIsSane(t: {

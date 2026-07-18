@@ -140,7 +140,7 @@ def page_dashboard():
     st.divider()
 
     # Cumulative virtual P&L chart
-    closed_trades = _reconstruct_closed_trades(virtual_events)
+    closed_trades = evaluator._reconstruct_closed_trades()
     if closed_trades:
         st.subheader("Cumulative virtual P&L")
         df = pd.DataFrame(closed_trades)
@@ -337,7 +337,7 @@ def page_track_record():
 
     # Closed trades table
     virtual_events = load_virtual_events()
-    closed_trades = _reconstruct_closed_trades(virtual_events)
+    closed_trades = evaluator._reconstruct_closed_trades()
     if not closed_trades:
         st.info("No closed virtual trades yet.")
         return
@@ -497,31 +497,6 @@ def page_config():
         with st.expander(title, expanded=True):
             for k, v in items:
                 st.markdown(f"- **{k}**: `{v}`")
-
-
-# ---------------------------------------------------------------------------
-# Helper — reconstruct closed trades by joining open + close events
-# ---------------------------------------------------------------------------
-def _reconstruct_closed_trades(events: list[dict]) -> list[dict]:
-    opens = {}
-    closes = {}
-    for ev in events:
-        tid = ev.get("trade_id")
-        if not tid:
-            continue
-        if ev.get("event") == "open":
-            opens[tid] = ev
-        elif ev.get("event") == "close":
-            closes[tid] = ev
-    out = []
-    for tid, close_ev in closes.items():
-        open_ev = opens.get(tid)
-        if not open_ev:
-            continue
-        merged = {**open_ev, **close_ev}
-        merged["trade_id"] = tid
-        out.append(merged)
-    return out
 
 
 # ---------------------------------------------------------------------------

@@ -35,24 +35,34 @@ def test_lcid_incident_is_rejected():
     assert "implausible" in why or "self-contradicting" in why
 
 
-def test_bb_incident_is_rejected():
-    # $196 credit on a $12 strike = 16% of strike value
-    ok, _ = csp_credit_is_sane(196.0, 12.0, delta=None)
-    assert not ok
+def test_bb_real_quote_passes_credit_gate():
+    # RECLASSIFIED after the review's live audit: BB's $196 quote was REAL
+    # (BS at its own IV reprices to $195.56; the 12P trades ~$3 today). At
+    # 16% of strike it passes the recalibrated 20% cap — so BB re-enters the
+    # record as an honest rule-breaking LOSER (ITM sale, delta -0.53), which
+    # the new ITM/delta guard in _pick_best_put now prevents at generation.
+    ok, _ = csp_credit_is_sane(196.0, 12.0, delta=-0.534)
+    assert ok
 
 
 def test_normal_csp_credits_pass():
     # WEN: $4 credit on $6 strike (0.7%); RIVN: $7 on $10 (0.7%)
     assert csp_credit_is_sane(4.0, 6.0, delta=-0.05)[0]
     assert csp_credit_is_sane(7.0, 10.0, delta=-0.10)[0]
-    # A fat-but-legit meme premium: 8% of strike at 30-delta
-    assert csp_credit_is_sane(80.0, 10.0, delta=-0.30)[0]
+    # Fat-but-legit high-IV premiums (verified vs a BS grid by the review):
+    # 30-delta/45-DTE at IV 1.5 prices ~15.7% of strike
+    assert csp_credit_is_sane(157.0, 10.0, delta=-0.30)[0]
+    # deep-OTM at IV 1.3 prices ~5.3% of strike
+    assert csp_credit_is_sane(53.0, 10.0, delta=-0.149)[0]
+    # LCID's REAL post-squeeze price today: ~$24 on the 3.5 strike, delta
+    # ~-0.10 (7% of strike) — the exact false positive the audit caught live
+    assert csp_credit_is_sane(24.0, 3.5, delta=-0.10)[0]
 
 
 def test_deep_otm_contradiction_rejected_even_under_main_cap():
-    # 8% of strike is fine at 30-delta but garbage at 5-delta
-    assert csp_credit_is_sane(80.0, 10.0, delta=-0.30)[0]
-    assert not csp_credit_is_sane(80.0, 10.0, delta=-0.05)[0]
+    # 9% of strike is fine at 30-delta but garbage at 5-delta (cap 8%)
+    assert csp_credit_is_sane(90.0, 10.0, delta=-0.30)[0]
+    assert not csp_credit_is_sane(90.0, 10.0, delta=-0.05)[0]
 
 
 def test_non_positive_credit_or_strike_rejected():
