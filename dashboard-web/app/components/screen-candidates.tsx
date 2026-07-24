@@ -247,8 +247,19 @@ export function ScreenCandidates({
                       )}
                     </>
                   ) : (
-                    <div className="mt-2 text-xs text-muted italic">
-                      {c.skip_reason || 'No spread passed the gates (credit/friction/liquidity).'}
+                    <div className="mt-2 text-xs text-muted">
+                      <span className="italic">
+                        {c.skip_reason || 'No spread passed the gates.'}
+                      </span>
+                      {c.void_reasons?.length ? (
+                        <ul className="mt-1 space-y-0.5">
+                          {c.void_reasons.slice(0, 3).map((r, i) => (
+                            <li key={i} className={r.includes('NEAR MISS') ? 'text-warning' : ''}>
+                              • {r}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
                     </div>
                   )}
                 </div>

@@ -79,8 +79,14 @@ def step_mark_virtual_to_market(price_data: dict, eur_usd_rate=None) -> dict:
         # Use 30-day realized vol as IV proxy (slightly longer than 20 to dampen)
         return data_pipeline.recent_realized_vol(df, window=30) or 0.30  # 30% default
 
+    # Market-quote marks only make sense while the market can quote —
+    # otherwise every fetch is a wasted network call that returns None
+    # anyway (the two-sided-quote gate rejects after-hours rows).
+    quote_resolver = (virtual_tracker.market_quote_resolver
+                      if us_market_likely_open() else None)
     summary = virtual_tracker.update_all_open_positions(
-        spot_resolver, iv_resolver, eur_usd_rate=eur_usd_rate)
+        spot_resolver, iv_resolver, eur_usd_rate=eur_usd_rate,
+        quote_resolver=quote_resolver)
     logger.info(
         f"Virtual mark-to-market: {summary['updated']} updated, "
         f"{summary['closed']} closed (PnL ${summary['closed_pnl_total']:+.2f})"
@@ -196,11 +202,13 @@ def step_generate_setups(ranked, ibkr_client=None, tier: str = "sandbox") -> lis
                 logger.debug(f"ex-div check failed for {r.ticker}: {e}")
 
         chain = options_data.fetch_chain(r.ticker, r.last_price, ibkr_client=ibkr_client)
+        void_reasons: list[str] = []
         if tier == "live":
-            setup = setup_generator.generate_spread_setup(r.ticker, r.last_price, chain)
+            setup = setup_generator.generate_spread_setup(
+                r.ticker, r.last_price, chain, diagnostics=void_reasons)
         else:
             setup = setup_generator.generate_setup(r.ticker, r.last_price, chain)
-        out.append({
+        entry = {
             "ticker": r.ticker,
             "last_price": r.last_price,
             "rv_percentile": r.rv_percentile,
@@ -210,8 +218,30 @@ def step_generate_setups(ranked, ibkr_client=None, tier: str = "sandbox") -> lis
             "rank": r.rank,
             "tier": tier,
             "setup": setup.to_dict() if setup else None,
-        })
+        }
+        # Near-miss ledger: WHY a live candidate voided, with numbers —
+        # a silent 'no' for months is the documented override trigger.
+        if tier == "live" and setup is None and void_reasons:
+            entry["void_reasons"] = void_reasons[:6]
+            logger.info(f"[live] {r.ticker} voided: {void_reasons[0]}")
+        out.append(entry)
     return out
+
+
+def us_market_likely_open(now: datetime | None = None) -> bool:
+    """
+    Coarse check: is the US equity market plausibly open right now (UTC)?
+    Used only for LABELING — 'no live quotes' outside these hours means
+    'market closed', not 'no trade qualified'. Covers both DST regimes
+    (13:30-20:00 UTC summer, 14:30-21:00 winter) by accepting the union.
+    Holidays are not modeled; worst case a holiday run is labeled as a
+    market verdict, which the near-miss ledger then clarifies.
+    """
+    now = now or datetime.utcnow()
+    if now.weekday() >= 5:
+        return False
+    minutes = now.hour * 60 + now.minute
+    return (13 * 60 + 30) <= minutes < (21 * 60)
 
 
 def step_open_virtual_positions(
@@ -281,13 +311,20 @@ def step_compute_open_positions_data(price_data: dict) -> list[dict]:
     """Compute current P&L for each open virtual trade — for email display."""
     rows = []
     open_trades = virtual_tracker.get_open_virtual_trades()
+    # Same mark basis as the close path — a table showing model +$12 next to
+    # a market-marked -$25 close erodes trust in both numbers. The per-run
+    # quote cache is already warm from the mark step, so this is ~free.
+    use_quotes = us_market_likely_open()
     for t in open_trades:
         df = price_data.get(t.ticker)
         if df is None or df.empty:
             continue
         spot = data_pipeline.last_price(df)
         iv = data_pipeline.recent_realized_vol(df, window=30) or 0.30
-        result = virtual_tracker.evaluate_open_position(t, spot, iv)
+        market_price = (virtual_tracker.market_quote_resolver(t)
+                        if use_quotes else None)
+        result = virtual_tracker.evaluate_open_position(
+            t, spot, iv, market_price=market_price)
         rows.append({
             "ticker": t.ticker,
             "strike": t.strike,
@@ -532,10 +569,48 @@ def run_weekly_screen(
         # 8. Assemble health
         health = assemble_health(vix, earnings_data, len(ranked), earnings_canary)
 
-        # 9. Render + send email (two-tier layout). Daily runs skip email
-        # entirely — the dashboard's Daily tab is their surface.
+        # 9. Render + send email (two-tier layout). Daily runs skip the
+        # weekly digest — EXCEPT when a market-hours run stages a live
+        # ticket, which is now THE acting signal (real two-sided quotes;
+        # the Sunday digest is planning-only, its prices being Friday's).
         sent = False
         preview_path = None
+        alert_failed = False
+        # Alert dedup: a 30-45 DTE spread stays viable for DAYS — alerting on
+        # 'viable' would command TAKE {ticker} every day for the same trade.
+        # Only a ticket whose virtual position was NEWLY opened this run is
+        # news; repeats are suppressed by the one-per-ticker dedup upstream.
+        opened_tickers = {tid.split("::")[1] for tid in opened if "::" in tid}
+        newly_staged_live = [c for c in live_viable if c["ticker"] in opened_tickers]
+        if is_daily and newly_staged_live:
+            alert_flags = {
+                "live_risk_open": sum(
+                    float(p.get("max_loss") or 0)
+                    for p in open_positions if p.get("tier") == "live"),
+                "budget_cap": config.MAX_TOTAL_PREMIUM_AT_RISK,
+                "slots_used": sum(1 for p in open_positions if p.get("tier") == "live"),
+                "slots_max": config.MAX_OPEN_POSITIONS,
+                "max_risk_per_spread": config.MAX_RISK_PER_SPREAD,
+                "live_viable_count": len(newly_staged_live),
+                "no_trade_week": False,
+                "opened_count": len(opened),
+                "closed_count": mark_summary["closed"],
+                "closed_pnl": mark_summary["closed_pnl_total"],
+                "open_positions_count": len(open_positions),
+                "market_open": us_market_likely_open(),
+            }
+            alert_candidates = [
+                c for c in live_candidates
+                if c.get("setup") is None or c["ticker"] in opened_tickers
+            ]
+            subject, html = notify.render_ticket_alert(alert_candidates, alert_flags)
+            preview_path = notify.write_preview(subject, html)
+            sent = notify.send_email(subject, html)
+            if not sent:
+                # A staged ticket the owner never hears about is the worst
+                # silent failure this system has — go loudly red.
+                alert_failed = True
+            logger.info(f"TICKET ALERT {'sent' if sent else 'NOT SENT — failing run'}: {subject}")
         if not is_daily:
             week_label = now.strftime("Week of %Y-%m-%d")
             # Risk-budget ledger for the email: what the playbook caps allow
@@ -556,6 +631,7 @@ def run_weekly_screen(
                 "slots_used": len(live_open),
                 "slots_max": config.MAX_OPEN_POSITIONS,
                 "max_risk_per_spread": config.MAX_RISK_PER_SPREAD,
+                "market_open": us_market_likely_open(),
             }
             subject, html = notify.render_full_email(
                 week_label=week_label,
@@ -609,6 +685,13 @@ def run_weekly_screen(
         )
         deadman.ping_success(ping_msg)
         logger.info(f"Run complete: {ping_msg}")
+        if alert_failed:
+            logger.error(
+                "A live ticket STAGED but the alert email FAILED to send — "
+                "returning non-zero so the workflow goes red. The ticket "
+                "content is in the journal and the uploaded email preview."
+            )
+            return 1
         return 0
     except Exception as e:
         logger.exception(f"Screener run failed: {e}")

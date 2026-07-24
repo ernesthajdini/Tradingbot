@@ -44,6 +44,7 @@ export interface CandidatePayload {
   setup: VirtualSetup | null;
   tier?: 'live' | 'sandbox';
   skip_reason?: string;
+  void_reasons?: string[]; // near-miss ledger: why a live candidate voided
 }
 
 export interface VirtualSetup {

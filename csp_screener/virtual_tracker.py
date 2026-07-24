@@ -295,13 +295,22 @@ def evaluate_open_position(
     current_spot: float,
     current_iv: float,
     today: Optional[datetime] = None,
+    market_price: Optional[float] = None,
 ) -> dict:
     """
     Compute current virtual P&L and check if any exit rule fires.
 
+    market_price: the position's CURRENT market value per contract (from a
+    real, zombie-filtered quote). When provided, it IS the mark and the BS
+    model runs only for the model_put_price comparison field — the model
+    'prices profits too early' by its own admission, so market marks are
+    the honest input to the go-live gate.
+
     Returns dict:
       {
-        'current_put_price': float,
+        'current_put_price': float,     # the mark actually used
+        'model_put_price': float,       # BS/RV model value (comparison)
+        'mark_source': 'market'|'model',
         'pnl': float,
         'pnl_pct_of_credit': float,
         'dte_remaining': int,
@@ -347,7 +356,14 @@ def evaluate_open_position(
         current_put_price_per_share = max(
             0.0, current_put_price_per_share - long_price_per_share
         )
-    current_put_price = current_put_price_per_share * 100.0
+    model_put_price = current_put_price_per_share * 100.0
+
+    if market_price is not None and market_price >= 0:
+        current_put_price = market_price
+        mark_source = "market"
+    else:
+        current_put_price = model_put_price
+        mark_source = "model"
 
     pnl = trade.credit_received - current_put_price
     pnl_pct = pnl / trade.credit_received if trade.credit_received else 0.0
@@ -374,6 +390,8 @@ def evaluate_open_position(
 
     return {
         "current_put_price": round(current_put_price, 4),
+        "model_put_price": round(model_put_price, 4),
+        "mark_source": mark_source,
         "pnl": round(pnl, 2),
         "pnl_pct_of_credit": round(pnl_pct, 4),
         "dte_remaining": dte_remaining,
@@ -382,11 +400,32 @@ def evaluate_open_position(
     }
 
 
+def market_quote_resolver(trade: "OpenVirtualTrade") -> Optional[float]:
+    """
+    Real-quote mark for an open position (per contract), or None to fall
+    back to the model. Routed through the zombie/staleness defenses.
+    """
+    try:
+        from csp_screener import options_data
+        long_strike = (trade.long_strike
+                       if trade.structure == "put_credit_spread" else None)
+        return options_data.fetch_position_quote(
+            trade.ticker,
+            trade.expiration.date().isoformat(),
+            trade.strike,
+            long_strike,
+        )
+    except Exception as e:
+        logger.debug(f"market quote unavailable for {trade.trade_id}: {e}")
+        return None
+
+
 def update_all_open_positions(
     spot_resolver,
     iv_resolver,
     today: Optional[datetime] = None,
     eur_usd_rate: Optional[float] = None,
+    quote_resolver=None,
 ) -> dict:
     """
     Loop through every open virtual trade, re-price, close if exit triggers.
@@ -414,7 +453,9 @@ def update_all_open_positions(
                 logger.warning(f"No spot/iv for {trade.ticker}; skipping eval")
                 continue
 
-            result = evaluate_open_position(trade, spot, iv, today=today)
+            market_price = quote_resolver(trade) if quote_resolver else None
+            result = evaluate_open_position(
+                trade, spot, iv, today=today, market_price=market_price)
             summary["updated"] += 1
 
             if result["exit_now"]:
@@ -425,7 +466,9 @@ def update_all_open_positions(
                     final_put_price=result["current_put_price"],
                     credit_received=trade.credit_received,
                     notes=f"days_held={(today.date() - trade.opened_at.date()).days}, "
-                          f"dte_at_open={trade.dte_at_open}",
+                          f"dte_at_open={trade.dte_at_open}, "
+                          f"mark_source={result['mark_source']}, "
+                          f"model_price={result['model_put_price']:.2f}",
                     ticker=trade.ticker,
                     strike=trade.strike,
                     expiration=trade.expiration.date().isoformat(),
@@ -441,6 +484,7 @@ def update_all_open_positions(
                     "action": "closed",
                     "pnl": close_record["pnl"],
                     "reason": result["exit_reason"],
+                    "mark_source": result["mark_source"],
                 })
             else:
                 summary["details"].append({
@@ -448,6 +492,7 @@ def update_all_open_positions(
                     "action": "marked",
                     "pnl_now": result["pnl"],
                     "dte_remaining": result["dte_remaining"],
+                    "mark_source": result["mark_source"],
                 })
         except Exception as e:
             logger.error(f"Error processing virtual trade {trade.trade_id}: {e}")

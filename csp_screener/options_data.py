@@ -207,48 +207,7 @@ def _fetch_yfinance(ticker: str, spot_price: float) -> Optional[OptionsChain]:
     for exp in candidate_exps:
         try:
             oc = t.option_chain(exp.strftime("%Y-%m-%d"))
-            exp_puts: list[OptionContract] = []
-            for _, row in oc.puts.iterrows():
-                # NaN-safe extraction. NOTE: `NaN or 0` does NOT work — NaN is
-                # truthy, so int(NaN) raised and silently dropped the whole
-                # expiration. Use _num() everywhere.
-                bid = _num(row.get("bid"))
-                ask = _num(row.get("ask"))
-                last = _num(row.get("lastPrice"))
-                mid = (bid + ask) / 2 if (bid > 0 and ask > 0) else last
-                iv = row.get("impliedVolatility")
-                iv = float(iv) if (pd.notna(iv) and iv) else None
-                ltd = row.get("lastTradeDate")
-                try:
-                    ltd = (pd.Timestamp(ltd).tz_localize(None).to_pydatetime()
-                           if pd.notna(ltd) else None)
-                except (TypeError, ValueError):
-                    # already tz-naive or unparseable
-                    try:
-                        ltd = pd.Timestamp(ltd).to_pydatetime() if pd.notna(ltd) else None
-                    except (TypeError, ValueError):
-                        ltd = None
-                sym = row.get("contractSymbol")
-                sym = str(sym) if pd.notna(sym) else None
-
-                exp_puts.append(OptionContract(
-                    ticker=ticker,
-                    expiration=exp,
-                    strike=float(row["strike"]),
-                    right="P",
-                    bid=bid,
-                    ask=ask,
-                    last=last,
-                    mid=mid,
-                    open_interest=int(_num(row.get("openInterest"))),
-                    volume=int(_num(row.get("volume"))),
-                    iv=iv,
-                    delta=_estimate_put_delta(spot_price, float(row["strike"]), exp, iv),
-                    source="yfinance",
-                    last_trade_date=ltd,
-                    contract_symbol=sym,
-                ))
-
+            exp_puts = _parse_yf_puts(ticker, exp, oc.puts, spot_price)
             kept, dropped = _filter_zombie_puts(exp_puts)
             for reason in dropped:
                 logger.warning(f"zombie-row filter: {reason}")
@@ -257,6 +216,129 @@ def _fetch_yfinance(ticker: str, spot_price: float) -> Optional[OptionsChain]:
             logger.debug(f"yfinance chain parse failed for {ticker} {exp}: {e}")
 
     return chain
+
+
+def _parse_yf_puts(
+    ticker: str,
+    exp: datetime,
+    puts_df,
+    spot_price: Optional[float] = None,
+) -> list[OptionContract]:
+    """Parse one yfinance puts DataFrame into OptionContracts (no filtering)."""
+    out: list[OptionContract] = []
+    for _, row in puts_df.iterrows():
+        # NaN-safe extraction. NOTE: `NaN or 0` does NOT work — NaN is
+        # truthy, so int(NaN) raised and silently dropped the whole
+        # expiration. Use _num() everywhere.
+        bid = _num(row.get("bid"))
+        ask = _num(row.get("ask"))
+        last = _num(row.get("lastPrice"))
+        mid = (bid + ask) / 2 if (bid > 0 and ask > 0) else last
+        iv = row.get("impliedVolatility")
+        iv = float(iv) if (pd.notna(iv) and iv) else None
+        ltd = row.get("lastTradeDate")
+        try:
+            ltd = (pd.Timestamp(ltd).tz_localize(None).to_pydatetime()
+                   if pd.notna(ltd) else None)
+        except (TypeError, ValueError):
+            # already tz-naive or unparseable
+            try:
+                ltd = pd.Timestamp(ltd).to_pydatetime() if pd.notna(ltd) else None
+            except (TypeError, ValueError):
+                ltd = None
+        sym = row.get("contractSymbol")
+        sym = str(sym) if pd.notna(sym) else None
+        strike = float(row["strike"])
+
+        out.append(OptionContract(
+            ticker=ticker,
+            expiration=exp,
+            strike=strike,
+            right="P",
+            bid=bid,
+            ask=ask,
+            last=last,
+            mid=mid,
+            open_interest=int(_num(row.get("openInterest"))),
+            volume=int(_num(row.get("volume"))),
+            iv=iv,
+            delta=(_estimate_put_delta(spot_price, strike, exp, iv)
+                   if spot_price is not None else None),
+            source="yfinance",
+            last_trade_date=ltd,
+            contract_symbol=sym,
+        ))
+    return out
+
+
+# Per-run cache: one chain fetch per (ticker, expiration) no matter how many
+# open positions share it.
+_position_quote_cache: dict = {}
+
+
+def fetch_position_quote(
+    ticker: str,
+    expiration_iso: str,
+    strike: float,
+    long_strike: Optional[float] = None,
+) -> Optional[float]:
+    """
+    CURRENT market value of a specific put (or put spread), per contract,
+    for marking an open position — or None when no clean quote exists.
+
+    Why: the BS/RV model mark 'prices profits too early' by its own
+    admission; every close it produces is a model artifact feeding the
+    200-trade go-live gate. Real quotes, filtered through the same zombie
+    defenses as candidate selection, are the honest mark. Callers fall
+    back to the model when this returns None (weekend, outage, zombie).
+    """
+    key = (ticker, expiration_iso)
+    if key not in _position_quote_cache:
+        try:
+            import yfinance as yf
+            exp = datetime.fromisoformat(expiration_iso)
+            oc = yf.Ticker(ticker).option_chain(exp.strftime("%Y-%m-%d"))
+            rows = _parse_yf_puts(ticker, exp, oc.puts, spot_price=None)
+            kept, dropped = _filter_zombie_puts(rows)
+            for reason in dropped:
+                logger.debug(f"position-quote zombie filter: {reason}")
+            _position_quote_cache[key] = {round(c.strike, 4): c for c in kept}
+        except Exception as e:
+            logger.debug(f"fetch_position_quote failed for {ticker} {expiration_iso}: {e}")
+            _position_quote_cache[key] = {}
+    by_strike = _position_quote_cache[key]
+
+    def _tradeable(c: Optional[OptionContract]) -> bool:
+        """
+        A mark-worthy quote must be LIVE and TIGHT — not a last-trade echo.
+
+        Adversarial review (verified live): after the close yfinance zeroes
+        bid/ask and mid falls back to lastPrice; two spread legs' lasts are
+        non-synchronous, can invert, and the zero-clamp then minted a fake
+        +100% 'market' win. And at the open, auction-wide quotes could fire
+        stop-losses at 3x true value. So: two-sided quote required, and the
+        same width gate entries use — anything else falls back to the model.
+        """
+        if c is None or c.mid <= 0:
+            return False
+        if not (c.bid > 0 and c.ask > 0):
+            return False
+        return c.bid_ask_spread_pct <= config.MAX_BID_ASK_PCT_OF_MID * 2
+
+    short = by_strike.get(round(float(strike), 4))
+    if not _tradeable(short):
+        return None
+    if long_strike is None:
+        return short.mid * 100.0
+    long_c = by_strike.get(round(float(long_strike), 4))
+    if long_c is None or not (long_c.bid > 0 and long_c.ask > 0) or long_c.mid <= 0:
+        return None
+    net = (short.mid - long_c.mid) * 100.0
+    if net < 0:
+        # A put spread's value cannot be negative — inverted legs mean the
+        # quotes are inconsistent. Never clamp-to-zero (that IS full profit).
+        return None
+    return net
 
 
 def _num(value, default: float = 0.0) -> float:

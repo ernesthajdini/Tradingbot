@@ -83,8 +83,12 @@ def run() -> int:
             return data_pipeline.recent_realized_vol(df, window=30) or 0.30
 
         eur_usd = data_pipeline.get_eurusd_rate() if config.TRACK_EUR else None
+        from csp_screener.main import us_market_likely_open
+        quote_resolver = (virtual_tracker.market_quote_resolver
+                          if us_market_likely_open() else None)
         summary = virtual_tracker.update_all_open_positions(
-            spot_resolver, iv_resolver, eur_usd_rate=eur_usd)
+            spot_resolver, iv_resolver, eur_usd_rate=eur_usd,
+            quote_resolver=quote_resolver)
         logger.info(
             f"Daily update: {summary['updated']} marked, "
             f"{summary['closed']} closed (PnL ${summary['closed_pnl_total']:+.2f})"

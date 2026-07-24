@@ -354,6 +354,31 @@ def render_insights_section(recommendations: list) -> str:
     return "".join(rows)
 
 
+def _render_near_misses(live_candidates: list[dict]) -> str:
+    """The near-miss ledger — WHY each live candidate voided, with numbers."""
+    rows = []
+    for c in live_candidates:
+        reasons = c.get("void_reasons") or []
+        if c.get("setup") or not reasons:
+            continue
+        near = next((r for r in reasons if "NEAR MISS" in r), reasons[0])
+        rows.append(
+            f"<div style='font-size:12px;color:#57606a;padding:3px 0;'>"
+            f"<b>{escape(c['ticker'])}</b>: {escape(near)}</div>"
+        )
+    if not rows:
+        return ""
+    return (
+        "<div style='margin-top:10px;padding:10px 12px;background:#f6f8fa;"
+        "border-radius:6px;'>"
+        "<div style='font-size:11px;font-weight:700;color:#57606a;"
+        "text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;'>"
+        "Why nothing qualified (near-miss ledger)</div>"
+        + "".join(rows) +
+        "</div>"
+    )
+
+
 def render_live_section(
     live_candidates: list[dict],
     no_trade_week: bool,
@@ -362,14 +387,29 @@ def render_live_section(
     """LIVE tier: put credit spreads with staged order tickets."""
     flags = flags or {}
     if no_trade_week or not any(c.get("setup") for c in live_candidates):
-        return (
-            "<div style='padding:16px;background:#ddf4ff;border:1px solid #54aeff;"
-            "border-radius:6px;font-weight:600;'>"
-            "🚫 NO TRADE THIS WEEK — no live-tier spread passed the gates "
-            "(net credit ≥ $25 after friction, friction ≤ 20% of credit, "
-            "live quotes, tight spreads). Sitting out is the designed outcome, "
-            "not a failure.</div>"
-        )
+        # Honest labeling: 'no trade' is a market verdict only when the
+        # market could actually speak. Outside market hours yfinance zeroes
+        # every bid/ask, so nothing can EVER stage — say so instead of
+        # implying the gates rejected real prices.
+        if flags.get("market_open") is False:
+            banner = (
+                "<div style='padding:16px;background:#f6f8fa;border:1px solid #d0d7de;"
+                "border-radius:6px;font-weight:600;'>"
+                "⏸ QUOTES UNAVAILABLE (market closed) — live tickets can only "
+                "stage during US market hours, when real two-sided quotes exist. "
+                "The weekday market-hours run is the acting signal; this digest "
+                "is planning-only.</div>"
+            )
+        else:
+            banner = (
+                "<div style='padding:16px;background:#ddf4ff;border:1px solid #54aeff;"
+                "border-radius:6px;font-weight:600;'>"
+                "🚫 NO TRADE — no live-tier spread passed the gates "
+                "(net credit ≥ $25 after friction, friction ≤ 20% of credit, "
+                "live quotes, tight spreads). Sitting out is the designed outcome, "
+                "not a failure.</div>"
+            )
+        return banner + _render_near_misses(live_candidates)
     blocks = []
     viable_seen = 0
     for c in live_candidates:
@@ -408,9 +448,9 @@ def render_live_section(
                               max_risk_cap=flags.get('max_risk_per_spread'))}
           <div style="font-size:12px;margin-top:10px;padding:8px 10px;background:#fff8c5;
                       border-radius:6px;">
-            <b>WHEN:</b> place it Monday, but not in the first 30 minutes after the
-            US open (spreads are widest then). These prices are Friday's close —
-            check the live mid in IBKR first: if it's dropped more than a couple of
+            <b>WHEN:</b> work it within ~90 minutes of this email — never inside the
+            first or last 30 minutes of the US session (spreads are widest there).
+            Check the live mid in IBKR first: if it's dropped more than a couple of
             cents below the staged credit, the edge is gone. Chase at most 1 tick;
             walking away unfilled is the plan working, not a miss. The GTC exits go
             in with the same order.
@@ -439,9 +479,18 @@ def render_bottom_line(flags: dict) -> str:
     n_open = flags.get("open_positions_count", 0)
 
     if flags.get("no_trade_week"):
-        headline = "🚫 Nothing to do this week — no real-money trade qualified."
-        sub = ("No spread passed the safety gates. That's the system working, "
-               "not failing. Skim the paper section if curious; otherwise close this email.")
+        if flags.get("market_open") is False:
+            # Honest labeling: with markets closed nothing COULD stage —
+            # this is not a market verdict, and saying so keeps the reader
+            # trusting the box on days when it IS a verdict.
+            headline = "🗓 Planning digest — markets are closed, so nothing can stage now."
+            sub = ("Live tickets stage from real quotes on the weekday "
+                   "market-hours run and arrive as separate 🎯 alerts. "
+                   "Use this digest to see what's brewing, not to act.")
+        else:
+            headline = "🚫 Nothing to do — no real-money trade qualified."
+            sub = ("No spread passed the safety gates. That's the system working, "
+                   "not failing. Skim the paper section if curious; otherwise close this email.")
         bg, border = "#ddf4ff", "#54aeff"
     else:
         headline = f"✅ {n_live} staged ticket(s) waiting for your approve/reject in IBKR."
@@ -497,6 +546,41 @@ def render_quality_legend() -> str:
     </div>"""
 
 
+def render_ticket_alert(live_candidates: list[dict], flags: dict) -> tuple[str, str]:
+    """
+    Compact intraday alert — sent ONLY when a market-hours run stages a
+    live ticket from real two-sided quotes. This is THE acting signal;
+    the Sunday digest is planning-only.
+    """
+    viable = [c for c in live_candidates if c.get("setup")]
+    best = viable[0]
+    s = best["setup"]
+    credit = s.get("net_credit_after_friction") or s["estimated_credit_per_contract"]
+    others = f", {len(viable) - 1} backup(s)" if len(viable) > 1 else ""
+    subject = (
+        f"[CSP Screener] 🎯 TICKET STAGED — TAKE {best['ticker']} "
+        f"(${credit:.0f} credit, ${s['max_loss_per_contract']:.0f} risk){others}"
+    )
+    bottom = render_bottom_line(dict(flags, live_viable_count=len(viable)))
+    live_html = render_live_section(live_candidates, False, flags)
+    html = f"""
+    <html><body style="font-family:sans-serif;max-width:900px;margin:auto;color:#1f2328;
+                       background:#fff;padding:20px;">
+      <h1 style="margin-bottom:0;font-size:20px;">🎯 Live ticket staged — from real quotes</h1>
+      <p style="color:#6e7781;margin-top:4px;font-size:13px;">
+        Generated {datetime.now().strftime('%Y-%m-%d %H:%M')} UTC during US market
+        hours. Unlike the Sunday digest, these prices are live right now.
+      </p>
+      {bottom}
+      {live_html}
+      <p style="font-size:11px;color:#6e7781;margin-top:16px;">
+        Reminder: approve or reject only — never retype. If in doubt, rejecting
+        is always a valid answer.
+      </p>
+    </body></html>"""
+    return subject, html
+
+
 def render_full_email(
     week_label: str,
     candidates: list[dict],
@@ -513,7 +597,10 @@ def render_full_email(
     viable = [c for c in live_candidates if c.get("setup")]
     n_live = len(viable)
     if flags.get("no_trade_week") or n_live == 0:
-        subject = f"[CSP Screener] {week_label} — NOTHING TO DO (no trade qualified)"
+        if flags.get("market_open") is False:
+            subject = f"[CSP Screener] {week_label} — planning digest (tickets stage weekdays)"
+        else:
+            subject = f"[CSP Screener] {week_label} — NOTHING TO DO (no trade qualified)"
     else:
         best = viable[0]
         s = best["setup"]
@@ -585,8 +672,10 @@ def render_full_email(
 
       <h1 style="margin-bottom:0;font-size:22px;">CSP Screener — {escape(week_label)}</h1>
       <p style="color:#6e7781;margin-top:4px;font-size:13px;">
-        Generated {datetime.now().strftime('%Y-%m-%d %H:%M')} • Underlying candidates only.
-        You pick the actual contract.
+        Generated {datetime.now().strftime('%Y-%m-%d %H:%M')} • <b>Planning digest</b> —
+        prices here are the last close, not live. Actionable tickets arrive as
+        separate 🎯 alerts from the weekday market-hours run, staged from real
+        quotes.
       </p>
 
       {bottom_line}

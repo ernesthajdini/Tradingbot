@@ -6,7 +6,11 @@ on:
     # 14:35–20:35 UTC ≈ 10:35 ET through 16:35 ET (covers open to close).
     # Public repo = free unlimited Actions minutes, so hourly costs nothing.
     - cron: '35 14-20 * * 1-5'
-    # Final end-of-day pass after close
+    # THE acting run: full screen DURING market hours (15:05 UTC ≈ 11:05 ET
+    # summer), when real two-sided quotes exist — the live tier structurally
+    # cannot stage tickets from after-close data (bid/ask are zeroed).
+    - cron: '5 15 * * 1-5'
+    # Final end-of-day pass after close (marks only — no screen)
     - cron: '30 21 * * 1-5'
   workflow_dispatch:
 
@@ -14,6 +18,11 @@ jobs:
   daily-check:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Skip when the 15:05 screen runs (it marks everything itself) and on
+    # manual dispatch (which runs the full screen) — otherwise two jobs
+    # hydrate the same open trades concurrently and can close the same
+    # position twice at different live prices (last-writer-wins in Supabase).
+    if: github.event_name == 'schedule' && github.event.schedule != '5 15 * * 1-5'
 
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -43,19 +52,28 @@ jobs:
       - name: Run daily check
         run: python -m csp_screener.daily_check
 
-  # Daily indications: full screen pipeline (candidates + virtual opens),
-  # no email — surfaces on the dashboard's Daily tab. Runs once per day on
-  # the end-of-day cron only (plus manual dispatch).
+  # Daily indications: full screen pipeline (candidates + virtual opens).
+  # Runs on the MARKET-HOURS cron (real two-sided quotes — the only slot
+  # where live tickets can stage; a staged ticket triggers an alert email).
+  # The old 21:30 UTC after-close slot no longer screens: it produced
+  # stale-quote candidates and structurally zero live tickets.
   daily-screen:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '30 21 * * 1-5'
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '5 15 * * 1-5'
 
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
       FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
       HEALTHCHECKS_PING_URL: ${{ secrets.HEALTHCHECKS_PING_URL_DAILY }}
+      # Email creds: the market-hours run sends the 🎯 ticket-staged alert —
+      # THE acting signal. Without these it would stage silently.
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      SMTP_TO: ${{ secrets.SMTP_TO }}
+      RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+      RESEND_TO: ${{ secrets.RESEND_TO }}
       PYTHONIOENCODING: utf-8
 
     steps:
@@ -74,6 +92,20 @@ jobs:
 
       - name: Run daily indications screen
         run: python -m csp_screener.main --no-ibkr --daily
+
+      # The 🎯 alert preview must survive the runner: if delivery ever
+      # fails, the staged ticket's content is recoverable from artifacts
+      # instead of lost with a green checkmark.
+      - name: Upload run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-screen-${{ github.run_number }}
+          path: |
+            csp_screener/output/journal/
+            csp_screener/output/logs/
+            csp_screener/output/email_preview_*.html
+          retention-days: 14
 
       # Same gate as the Sunday workflow: individual Supabase pushes are
       # non-fatal, but a run that wrote NOTHING to the cloud must fail

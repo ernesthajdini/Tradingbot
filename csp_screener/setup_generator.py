@@ -257,6 +257,7 @@ def generate_spread_setup(
     spot: float,
     chain: Optional[OptionsChain],
     target_delta: float = config.TARGET_DELTA,
+    diagnostics: Optional[list] = None,
 ) -> Optional[VirtualSetup]:
     """
     Build a PUT CREDIT SPREAD setup for a live-tier candidate:
@@ -268,8 +269,20 @@ def generate_spread_setup(
 
     Returns None if no viable spread exists — 'no trade' is a first-class
     outcome for the live tier.
+
+    diagnostics: optional list — when provided, every void gets a
+    human-readable reason appended (the NEAR-MISS LEDGER). A silent 'no'
+    for months is the documented override trigger; 'no because credit was
+    $31 vs the $40 floor' is a system working visibly.
     """
+    def _diag(msg: str) -> None:
+        # Dedupe: both width targets can resolve to the same long leg and
+        # emit identical reasons — one entry per distinct reason.
+        if diagnostics is not None and msg not in diagnostics:
+            diagnostics.append(msg)
+
     if chain is None or not chain.expirations:
+        _diag("no option chain data")
         return None
 
     today = datetime.now().date()
@@ -284,6 +297,9 @@ def generate_spread_setup(
         # LIVE tier demands live two-sided quotes — no stale-quote
         # degradation here. That leniency is sandbox-only.
         live_quoted = [p for p in puts if p.bid > 0 and p.ask > 0 and p.mid > 0]
+        if puts and not live_quoted:
+            _diag(f"{exp.date()}: no live two-sided quotes "
+                  f"(market closed or data outage — not a market verdict)")
 
         # SHORT leg gate: % of mid (this is where the premium lives)
         short_candidates = [
@@ -297,21 +313,38 @@ def generate_spread_setup(
             if (p.ask - p.bid) <= max(0.05, 0.10 * p.mid)
         ]
         if not short_candidates or len(long_candidates) < 1:
+            if live_quoted:
+                _diag(f"{exp.date()}: quotes live but spreads too wide "
+                      f"(> {config.MAX_BID_ASK_PCT_OF_MID:.0%} of mid)")
             continue
 
-        # Short leg: closest to target delta, else ~5% OTM
-        with_delta = [p for p in short_candidates if p.delta is not None]
+        # Short leg: closest to target delta, else ~5% OTM.
+        # Delta cap: the playbook spec is a 25-30 delta short leg. Without
+        # the cap the closest-to-target pick can land at 0.45+ when the
+        # chain is sparse — a rule violation, not a candidate. (Red-team
+        # finding: this cap existed only in the sandbox path.)
+        with_delta = [p for p in short_candidates
+                      if p.delta is not None and abs(p.delta) <= MAX_CSP_DELTA]
         if with_delta:
             short_leg = min(with_delta, key=lambda p: abs(abs(p.delta) - target_delta))
         else:
-            short_leg = min(short_candidates, key=lambda p: abs(p.strike - spot * 0.95))
+            no_delta = [p for p in short_candidates if p.delta is None]
+            if not no_delta:
+                _diag(f"{exp.date()}: all quoted strikes above the "
+                      f"{MAX_CSP_DELTA:.2f} delta cap — too close to the money")
+                continue
+            short_leg = min(no_delta, key=lambda p: abs(p.strike - spot * 0.95))
         if short_leg.strike >= spot:  # never sell ITM puts
+            _diag(f"{exp.date()}: best short leg would be ITM (strike "
+                  f"{short_leg.strike:g} >= spot {spot:.2f})")
             continue
 
         # Long leg: try the tier-preferred width first, then the other —
         # the friction gates are tight enough that only one width may pass.
         lower = [p for p in long_candidates if p.strike < short_leg.strike]
         if not lower:
+            _diag(f"{exp.date()}: no liquid long leg below the "
+                  f"{short_leg.strike:g} short strike")
             continue
         preferred = (config.SPREAD_WIDTH_NARROW if spot <= 30
                      else config.SPREAD_WIDTH_WIDE)
@@ -330,10 +363,14 @@ def generate_spread_setup(
                 continue
             ncs = short_leg.mid - cand.mid
             if ncs <= 0:
+                _diag(f"{exp.date()}: ${w:g}-wide at {short_leg.strike:g}/"
+                      f"{cand.strike:g} nets zero credit")
                 continue
             cr = ncs * 100.0
             ml = w * 100.0 - cr
             if ml > config.MAX_RISK_PER_SPREAD:
+                _diag(f"{exp.date()}: ${w:g}-wide risks ${ml:.0f} > "
+                      f"${config.MAX_RISK_PER_SPREAD:.0f} cap")
                 continue
             # Friction: 2 legs open + 2 legs close = 4 contracts of commission,
             # plus slippage on the credit both ways.
@@ -342,8 +379,18 @@ def generate_spread_setup(
             naf = cr - fr
             # Viability gates (playbook change #7)
             if naf < config.MIN_NET_CREDIT_AFTER_FRICTION:
+                _diag(f"{exp.date()}: ${w:g}-wide at {short_leg.strike:g}/"
+                      f"{cand.strike:g} nets ${naf:.0f} after friction vs the "
+                      f"${config.MIN_NET_CREDIT_AFTER_FRICTION:.0f} floor "
+                      f"(credit ${cr:.0f}, friction ${fr:.2f}) — NEAR MISS"
+                      if naf > 0 else
+                      f"{exp.date()}: ${w:g}-wide credit ${cr:.0f} fully "
+                      f"consumed by ${fr:.2f} friction")
                 continue
             if fr > config.MAX_FRICTION_PCT_OF_CREDIT * cr:
+                _diag(f"{exp.date()}: friction ${fr:.2f} is "
+                      f"{fr / cr:.0%} of the ${cr:.0f} credit "
+                      f"(cap {config.MAX_FRICTION_PCT_OF_CREDIT:.0%})")
                 continue
             long_leg, width, net_credit_share = cand, w, ncs
             credit, max_loss, friction, net_after_friction = cr, ml, fr, naf
