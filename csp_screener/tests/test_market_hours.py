@@ -237,6 +237,89 @@ def test_position_quote_rejects_wide_auction_quotes():
 
 
 # ---------------------------------------------------------------------------
+# Friction-viability entry gate (the negative-take-profit incident: T puts
+# collecting $1-2 credit closed as 'take_profit_50pct' with NEGATIVE net
+# P&L — 50% of a $2 credit cannot survive the $2 round-trip commission)
+# ---------------------------------------------------------------------------
+
+def _csp_chain(ticker, spot, strike, mid, delta=-0.20):
+    half = max(0.005, mid * 0.01)
+    put = OptionContract(
+        ticker=ticker, expiration=EXP, strike=strike, right="P",
+        bid=round(mid - half, 4), ask=round(mid + half, 4), last=mid, mid=mid,
+        open_interest=2000, volume=100, iv=0.5, delta=delta,
+        source="yfinance", last_trade_date=FRESH,
+    )
+    return OptionsChain(ticker=ticker, spot=spot, expirations=[EXP], puts=[put],
+                        source="yfinance")
+
+
+def test_tiny_credit_csp_rejected_at_entry():
+    from csp_screener.setup_generator import generate_setup
+    # $2 credit: a perfect 50% TP captures $1 gross vs ~$2.15 friction
+    chain = _csp_chain("T", 22.0, 18.0, 0.02)
+    assert generate_setup("T", 22.0, chain) is None
+
+
+def test_healthy_credit_csp_still_generates():
+    from csp_screener.setup_generator import generate_setup
+    # $30 credit: 50% TP nets ~$10.7 after friction — viable
+    chain = _csp_chain("LCID", 7.4, 4.0, 0.30, delta=-0.10)
+    setup = generate_setup("LCID", 7.4, chain)
+    assert setup is not None
+
+
+# ---------------------------------------------------------------------------
+# Reopen cooldown (T churned open→close→reopen 4x in 4 days)
+# ---------------------------------------------------------------------------
+
+def test_reopen_cooldown_blocks_recent_close():
+    from csp_screener.main import step_open_virtual_positions
+    from csp_screener.setup_generator import VirtualSetup
+
+    journal.append("virtual_trades", {
+        "event": "close", "trade_id": "old::T::18.0::2026-08-21", "ticker": "T",
+        "closed_at": (datetime.now() - timedelta(days=1)).isoformat(),
+        "exit_reason": "take_profit_50pct", "pnl": -0.5,
+        "strike": 18.0, "expiration": EXP.date().isoformat(),
+    })
+    s = VirtualSetup(
+        ticker="T", spot_at_screen=22.0, expiration=EXP.date().isoformat(),
+        dte=32, strike=18.0, pct_otm=0.18, delta=-0.2, iv=0.5,
+        bid=0.29, ask=0.31, mid=0.30, bid_ask_pct=0.06,
+        open_interest=2000, volume=100,
+        estimated_credit_per_contract=30.0, max_loss_per_contract=1770.0,
+        breakeven=17.7, data_quality="ibkr_greeks", reasoning=[],
+    )
+    opened = step_open_virtual_positions(
+        [{"ticker": "T", "setup": s.to_dict()}], "screen_cd")
+    assert opened == []  # cooldown blocks the reopen
+
+
+def test_reopen_allowed_after_cooldown_expires():
+    from csp_screener.main import REOPEN_COOLDOWN_DAYS, step_open_virtual_positions
+    from csp_screener.setup_generator import VirtualSetup
+
+    journal.append("virtual_trades", {
+        "event": "close", "trade_id": "old::T::18.0::2026-08-21", "ticker": "T",
+        "closed_at": (datetime.now() - timedelta(days=REOPEN_COOLDOWN_DAYS + 2)).isoformat(),
+        "exit_reason": "take_profit_50pct", "pnl": 12.0,
+        "strike": 18.0, "expiration": EXP.date().isoformat(),
+    })
+    s = VirtualSetup(
+        ticker="T", spot_at_screen=22.0, expiration=EXP.date().isoformat(),
+        dte=32, strike=18.0, pct_otm=0.18, delta=-0.2, iv=0.5,
+        bid=0.29, ask=0.31, mid=0.30, bid_ask_pct=0.06,
+        open_interest=2000, volume=100,
+        estimated_credit_per_contract=30.0, max_loss_per_contract=1770.0,
+        breakeven=17.7, data_quality="ibkr_greeks", reasoning=[],
+    )
+    opened = step_open_virtual_positions(
+        [{"ticker": "T", "setup": s.to_dict()}], "screen_cd2")
+    assert len(opened) == 1
+
+
+# ---------------------------------------------------------------------------
 # Ticket alert email
 # ---------------------------------------------------------------------------
 

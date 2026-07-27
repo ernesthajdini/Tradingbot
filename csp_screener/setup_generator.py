@@ -198,6 +198,26 @@ def generate_setup(
         logger.warning(f"{ticker}: setup rejected by credit-sanity gate — {why}")
         return None
 
+    # Friction-viability gate: a trade must be able to NET a profit at its
+    # own take-profit exit. Production evidence (Jul 2026): T puts collecting
+    # $1-2 credit fired 'take_profit_50pct' closes with NEGATIVE net P&L —
+    # capturing 50% of a $2 credit ($1 gross) cannot survive the $2 round-trip
+    # commission. Those trades were guaranteed losers at entry; refusing them
+    # is economics, not strategy tuning (the live tier's $25 net floor is the
+    # same idea — this is its scaled-down sandbox sibling).
+    tp_exit_price = (1.0 - config.VIRTUAL_TP_PCT) * credit_per_contract
+    friction_at_tp = (2 * config.COMMISSION_PER_CONTRACT
+                      + config.SLIPPAGE_PCT_OF_PREMIUM
+                      * (credit_per_contract + tp_exit_price))
+    net_at_best_exit = config.VIRTUAL_TP_PCT * credit_per_contract - friction_at_tp
+    if net_at_best_exit <= 0:
+        logger.info(
+            f"{ticker}: setup rejected — credit ${credit_per_contract:.2f} too "
+            f"small to survive friction (a perfect 50% take-profit would net "
+            f"${net_at_best_exit:.2f})"
+        )
+        return None
+
     max_loss_per_contract = (strike * 100) - credit_per_contract
     breakeven = strike - credit_per_share
 

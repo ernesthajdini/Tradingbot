@@ -58,6 +58,10 @@ def _setup_logging():
 
 logger = logging.getLogger("csp_screener.main")
 
+# Days a ticker sits out after any close before it may reopen (churn guard;
+# structural bound like the sanity caps — deliberately outside config.py).
+REOPEN_COOLDOWN_DAYS = 3
+
 
 # ---------------------------------------------------------------------------
 # Pipeline steps
@@ -269,6 +273,10 @@ def step_open_virtual_positions(
         for t in open_trades
     }
     open_tickers = {t.ticker for t in open_trades}
+    # Reopen cooldown: a ticker that just closed must sit out a few days —
+    # otherwise a name that take-profits overnight churns open→close→reopen
+    # daily (T did four laps in four days), paying friction every lap.
+    cooldown_tickers = virtual_tracker.recently_closed_tickers(REOPEN_COOLDOWN_DAYS)
     open_count = len(already_open)
 
     opened = []
@@ -288,6 +296,12 @@ def step_open_virtual_positions(
             logger.info(
                 f"Skipping {setup_dict['ticker']}: ticker already has an "
                 f"open virtual position"
+            )
+            continue
+        if setup_dict["ticker"] in cooldown_tickers:
+            logger.info(
+                f"Skipping {setup_dict['ticker']}: closed within the last "
+                f"{REOPEN_COOLDOWN_DAYS}d (reopen cooldown)"
             )
             continue
         if open_count + len(opened) >= config.MAX_VIRTUAL_OPEN:

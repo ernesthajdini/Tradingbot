@@ -400,6 +400,33 @@ def evaluate_open_position(
     }
 
 
+def recently_closed_tickers(days: int = 3) -> set:
+    """
+    Tickers whose most recent CLOSE is within `days` — used as a reopen
+    cooldown. Production evidence (Jul 2026): T cycled open→close→reopen
+    four times in four days, burning round-trip friction on every lap and
+    stuffing the paper pool with correlated repeats. A trade that just
+    closed teaches nothing new for a few days; a diverse pool does.
+    """
+    cutoff = datetime.now() - timedelta(days=days)
+    out = set()
+    for ev in journal.read_all("virtual_trades"):
+        if ev.get("event") != "close":
+            continue
+        tk = ev.get("ticker")
+        closed_at = ev.get("closed_at")
+        if not tk or not closed_at:
+            continue
+        try:
+            ts = datetime.fromisoformat(
+                str(closed_at).replace("Z", "+00:00")).replace(tzinfo=None)
+            if ts >= cutoff:
+                out.add(tk)
+        except (ValueError, TypeError):
+            continue
+    return out
+
+
 def market_quote_resolver(trade: "OpenVirtualTrade") -> Optional[float]:
     """
     Real-quote mark for an open position (per contract), or None to fall
