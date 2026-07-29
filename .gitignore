@@ -38,3 +38,6 @@ Thumbs.db
 # Environment variables
 .env
 *.tsbuildinfo
+
+# stray analysis artifacts
+*.csv
