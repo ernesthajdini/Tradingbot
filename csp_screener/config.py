@@ -134,8 +134,25 @@ SMTP_PORT: int = 587
 # ---------------------------------------------------------------------------
 # Trading friction (applied to VIRTUAL PnL so the track record is honest)
 # ---------------------------------------------------------------------------
-# IBKR Fixed pricing has a $1.00 ORDER MINIMUM which always binds at 1-lot.
-# $0.65 was too kind. (Playbook change #2.)
+# VERIFIED against the official IBIE fee schedule, 2026-07-27
+# (interactivebrokers.ie/en/pricing/commissions-options.php):
+#   - IBIE offers TIERED pricing ONLY for US options (no Fixed schedule) —
+#     the playbook's "Fixed $1.00 order minimum" premise was the wrong
+#     schedule, but the numbers land in the same place:
+#   - Tiered ≤10k contracts/mo: $0.65/contract (premium ≥ $0.10),
+#     $0.50 ($0.05-0.10), $0.25 (< $0.05); MINIMUM $1.00 PER ORDER;
+#     PLUS pass-through exchange/clearing/regulatory fees (Tiered is not
+#     all-in) — roughly $0.20-0.70/contract depending on venue/premium.
+#   - 1-lot CSP: the $1.00 order minimum always binds → $1.00/side is
+#     EXACTLY right before pass-through fees.
+#   - 2-leg spread combo (one order): $0.90-1.30 commission + pass-through
+#     → the 4 x COMMISSION_PER_CONTRACT round-trip in setup_generator
+#     (~$4.00 all-in) sits INSIDE the honest range, pessimistic-leaning —
+#     which is the correct bias for paper numbers per playbook change #3.
+# VERDICT: values stand. The PROFITABILITY_MAP item-3 hypothesis
+# ($2.60 all-in, floor drops to ~$26-31) assumed Fixed pricing, which this
+# entity cannot get. The first ~20 live fills (playbook M8-M9) remain the
+# final calibrators.
 COMMISSION_PER_CONTRACT: float = 1.00
 # Slippage as a fraction of premium, each way.
 # BASE = plausible fill quality in liquid penny-quoted names.
