@@ -111,9 +111,17 @@ def step_build_contexts(
         price_min, price_max = config.PRICE_MIN, config.PRICE_MAX
 
     contexts = []
+    stale_skipped = 0
     for ticker in universe.get_universe(tier):
         df = price_data.get(ticker)
         if df is None or df.empty:
+            continue
+        # Refuse to screen on stale prices. Every gate downstream (strike
+        # choice, never-sell-ITM, delta cap, pct_otm) trusts this spot; a
+        # data hole must degrade to "no candidate", never to a silent
+        # decision on an old price.
+        if data_pipeline.is_stale(df):
+            stale_skipped += 1
             continue
         ctx = TickerContext(
             ticker=ticker,
@@ -125,6 +133,11 @@ def step_build_contexts(
             price_max=price_max,
         )
         contexts.append(ctx)
+    if stale_skipped:
+        logger.warning(
+            f"[{tier}] skipped {stale_skipped} ticker(s) with stale price data "
+            f"(newest bar older than the weekend/holiday tolerance)"
+        )
     return contexts
 
 
@@ -209,9 +222,12 @@ def step_generate_setups(ranked, ibkr_client=None, tier: str = "sandbox") -> lis
         void_reasons: list[str] = []
         if tier == "live":
             setup = setup_generator.generate_spread_setup(
-                r.ticker, r.last_price, chain, diagnostics=void_reasons)
+                r.ticker, r.last_price, chain, diagnostics=void_reasons,
+                next_earnings_days=r.next_earnings_days)
         else:
-            setup = setup_generator.generate_setup(r.ticker, r.last_price, chain)
+            setup = setup_generator.generate_setup(
+                r.ticker, r.last_price, chain,
+                next_earnings_days=r.next_earnings_days)
         entry = {
             "ticker": r.ticker,
             "last_price": r.last_price,

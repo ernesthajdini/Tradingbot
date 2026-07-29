@@ -100,10 +100,17 @@ def _plain_action_html(
     pretty, days = _fmt_expiry(setup["expiration"])
     is_spread = (setup.get("structure") == "put_credit_spread"
                  and setup.get("long_strike") is not None)
-    credit = setup.get("net_credit_after_friction") or setup["estimated_credit_per_contract"]
     max_loss = setup["max_loss_per_contract"]
     strike = setup["strike"]
     is_paper = tier != "live"
+    # Lead with what the ATTACHED exit plan delivers, not the
+    # expire-worthless number — this line sits directly above "buy back at
+    # 50% of the credit", so the two must agree.
+    from csp_screener.setup_generator import net_at_tp_exit
+    gross_credit = setup["estimated_credit_per_contract"]
+    credit = net_at_tp_exit(
+        gross_credit, "put_credit_spread" if is_spread else "csp")
+    hold_to_expiry = setup.get("net_credit_after_friction") or gross_credit
 
     if is_spread:
         headline = (
@@ -164,8 +171,12 @@ def _plain_action_html(
         title = "The trade"
         title_color = "#0969da"
         collect_html = (
-            f"<span style='color:#2da44e;font-weight:600;'>You collect ≈ "
-            f"${credit:.0f}</span> per contract, up front{collect_note}."
+            f"<span style='color:#2da44e;font-weight:600;'>You net ≈ "
+            f"${credit:.0f}</span> per contract at the 50% take-profit this "
+            f"ticket attaches{collect_note}. "
+            f"<span style='color:#6e7781;'>(${gross_credit:.0f} gross credit "
+            f"up front; ${hold_to_expiry:.0f} only if held to expiry, which "
+            f"the plan does not do.)</span>"
         )
         paper_note = ""
 
@@ -547,6 +558,7 @@ def render_quality_legend() -> str:
 
 
 def render_ticket_alert(live_candidates: list[dict], flags: dict) -> tuple[str, str]:
+    from csp_screener.setup_generator import net_at_tp_exit
     """
     Compact intraday alert — sent ONLY when a market-hours run stages a
     live ticket from real two-sided quotes. This is THE acting signal;
@@ -555,7 +567,9 @@ def render_ticket_alert(live_candidates: list[dict], flags: dict) -> tuple[str, 
     viable = [c for c in live_candidates if c.get("setup")]
     best = viable[0]
     s = best["setup"]
-    credit = s.get("net_credit_after_friction") or s["estimated_credit_per_contract"]
+    credit = net_at_tp_exit(
+        s["estimated_credit_per_contract"],
+        s.get("structure") or "csp")  # what the attached exit plan delivers
     others = f", {len(viable) - 1} backup(s)" if len(viable) > 1 else ""
     subject = (
         f"[CSP Screener] 🎯 TICKET STAGED — TAKE {best['ticker']} "
@@ -592,6 +606,7 @@ def render_full_email(
     flags: dict | None = None,
 ) -> tuple[str, str]:
     """Return (subject, html_body). Two-tier layout: LIVE on top, sandbox below."""
+    from csp_screener.setup_generator import net_at_tp_exit
     flags = flags or {}
     live_candidates = live_candidates or []
     viable = [c for c in live_candidates if c.get("setup")]
@@ -604,7 +619,9 @@ def render_full_email(
     else:
         best = viable[0]
         s = best["setup"]
-        credit = s.get("net_credit_after_friction") or s["estimated_credit_per_contract"]
+        credit = net_at_tp_exit(
+        s["estimated_credit_per_contract"],
+        s.get("structure") or "csp")  # what the attached exit plan delivers
         others = f", {n_live - 1} backup(s)" if n_live > 1 else ""
         subject = (
             f"[CSP Screener] {week_label} — TAKE {best['ticker']} "

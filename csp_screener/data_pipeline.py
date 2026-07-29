@@ -45,7 +45,12 @@ def fetch_prices(tickers: list[str], lookback_days: int = 400) -> dict[str, pd.D
         tickers_to_fetch = tickers
 
     start = (now - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
-    end = now.strftime("%Y-%m-%d")
+    # yfinance treats `end` as EXCLUSIVE. Passing today dropped today's bar,
+    # so EVERY spot price the screener used was at least one session stale —
+    # strike selection, the never-sell-ITM guard, pct_otm, the delta estimate
+    # and the model mark all ran on old prices (measured: 107/107 tickers
+    # stale, median |error| 2.4%, worst 17%). Tomorrow is inclusive of today.
+    end = (now + timedelta(days=1)).strftime("%Y-%m-%d")
 
     data = _download_with_retry(
         tickers_to_fetch, start=start, end=end,
@@ -128,9 +133,44 @@ def last_price(df: pd.DataFrame) -> Optional[float]:
     return float(df["Close"].iloc[-1])
 
 
+def is_stale(df: pd.DataFrame, max_age_days: int = 4) -> bool:
+    """
+    True when the newest bar is older than a plausible weekend/holiday gap.
+
+    A Yahoo data hole used to degrade SILENTLY into a stale screen (the
+    dropna in fetch_prices swallows empty rows). Callers use this to refuse
+    to screen rather than screen on old prices.
+    """
+    if df is None or df.empty:
+        return True
+    try:
+        last = df.index[-1].date()
+    except (AttributeError, IndexError):
+        return True
+    return (datetime.now().date() - last).days > max_age_days
+
+
+def _completed_sessions(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Drop today's bar when it is still forming. Intraday partial bars have
+    partial volume and a truncated return, which would understate average
+    volume and distort realized vol. Spot uses the live bar; the statistics
+    below use only completed sessions.
+    """
+    if df is None or df.empty:
+        return df
+    try:
+        if df.index[-1].date() >= datetime.now().date() and len(df) > 1:
+            return df.iloc[:-1]
+    except (AttributeError, IndexError):
+        pass
+    return df
+
+
 def avg_volume_20d(df: pd.DataFrame) -> Optional[float]:
     if df is None or df.empty or "Volume" not in df.columns:
         return None
+    df = _completed_sessions(df)
     if len(df) < 5:
         return None
     return float(df["Volume"].tail(20).mean())
@@ -139,6 +179,7 @@ def avg_volume_20d(df: pd.DataFrame) -> Optional[float]:
 def recent_realized_vol(df: pd.DataFrame, window: int = 20) -> Optional[float]:
     """Annualized realized vol from last `window` days of log returns."""
     import numpy as np
+    df = _completed_sessions(df)
     if df is None or df.empty or len(df) < window + 5:
         return None
     close = df["Adj Close"] if "Adj Close" in df.columns else df["Close"]

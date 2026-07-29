@@ -130,6 +130,15 @@ def recommend_from_buckets(
         if ci_lo <= baseline_wr <= ci_hi:
             continue  # deviation not statistically distinguishable — noise
         worse = b.deviation_from_overall < 0
+        # P&L-consistency gate (the ticker path has had one; this path did
+        # not). Demonstrated failure: a bucket with 19 wins in 20 trades and
+        # -$248 total P&L produced "86% win ↑ … consider weighting toward
+        # this band". Never recommend weighting toward a money-loser, and
+        # never warn away from a money-maker.
+        if not worse and b.avg_pnl <= 0:
+            continue
+        if worse and b.avg_pnl > 0:
+            continue
         sign = "↓" if worse else "↑"
         severity = "warn" if worse else "info"
         out.append(Recommendation(

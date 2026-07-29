@@ -31,6 +31,40 @@ logger = logging.getLogger(__name__)
 MAX_CSP_DELTA = 0.40
 
 
+def earnings_inside_hold(dte: int, next_earnings_days: Optional[int]) -> bool:
+    """
+    Would this expiration's position still be open when earnings report?
+
+    The ticker-level blackout (EARNINGS_EXCLUSION_DAYS) runs BEFORE any
+    expiration is chosen, so it cannot know the hold. Max hold is
+    dte - VIRTUAL_FORCE_EXIT_DTE (the 21-DTE forced close). With the real
+    expiry calendar the selector routinely picks 37 DTE → a 16-day hold,
+    longer than the 15-day effective blackout — so a company reporting in
+    16 days passed the filter and reported the day BEFORE the scheduled
+    exit. `<=` because before-open vs after-close is a coin flip.
+    """
+    if next_earnings_days is None or next_earnings_days < 0:
+        return False  # unknown earnings date — the ticker filter owns that call
+    hold_days = max(0, dte - config.VIRTUAL_FORCE_EXIT_DTE)
+    return next_earnings_days <= hold_days
+
+
+def net_at_tp_exit(credit_per_contract: float, structure: str = "csp") -> float:
+    """
+    What a position actually nets at its own 50% take-profit, after friction.
+
+    Every setup here attaches a GTC buyback at 50% of credit and a 21-DTE
+    forced close, so "credit minus friction" (the expire-worthless number)
+    overstates the designed outcome by ~2.3x. One helper so the sandbox
+    gate, the live ticket and the email can never disagree again.
+    """
+    exit_price = (1.0 - config.VIRTUAL_TP_PCT) * credit_per_contract
+    legs_round_trip = 4 if structure == "put_credit_spread" else 2
+    friction = (legs_round_trip * config.COMMISSION_PER_CONTRACT
+                + config.SLIPPAGE_PCT_OF_PREMIUM * (credit_per_contract + exit_price))
+    return config.VIRTUAL_TP_PCT * credit_per_contract - friction
+
+
 @dataclass
 class VirtualSetup:
     ticker: str
@@ -149,6 +183,7 @@ def generate_setup(
     spot: float,
     chain: Optional[OptionsChain],
     target_delta: float = config.TARGET_DELTA,
+    next_earnings_days: Optional[int] = None,
 ) -> Optional[VirtualSetup]:
     """
     Build a VirtualSetup for the given candidate. Returns None if no liquid
@@ -175,6 +210,12 @@ def generate_setup(
     chosen_exp = None
     quality_warnings: list[str] = []
     for exp in expirations_sorted:
+        exp_dte = (exp.date() - today).days
+        if earnings_inside_hold(exp_dte, next_earnings_days):
+            reasoning.append(
+                f"{exp.date()}: skipped — earnings in {next_earnings_days}d land "
+                f"inside the {max(0, exp_dte - config.VIRTUAL_FORCE_EXIT_DTE)}d hold")
+            continue
         c, warns = _pick_best_put(chain, exp, spot, target_delta)
         if c is not None:
             chosen_contract = c
@@ -205,11 +246,7 @@ def generate_setup(
     # commission. Those trades were guaranteed losers at entry; refusing them
     # is economics, not strategy tuning (the live tier's $25 net floor is the
     # same idea — this is its scaled-down sandbox sibling).
-    tp_exit_price = (1.0 - config.VIRTUAL_TP_PCT) * credit_per_contract
-    friction_at_tp = (2 * config.COMMISSION_PER_CONTRACT
-                      + config.SLIPPAGE_PCT_OF_PREMIUM
-                      * (credit_per_contract + tp_exit_price))
-    net_at_best_exit = config.VIRTUAL_TP_PCT * credit_per_contract - friction_at_tp
+    net_at_best_exit = net_at_tp_exit(credit_per_contract, "csp")
     if net_at_best_exit <= 0:
         logger.info(
             f"{ticker}: setup rejected — credit ${credit_per_contract:.2f} too "
@@ -278,6 +315,7 @@ def generate_spread_setup(
     chain: Optional[OptionsChain],
     target_delta: float = config.TARGET_DELTA,
     diagnostics: Optional[list] = None,
+    next_earnings_days: Optional[int] = None,
 ) -> Optional[VirtualSetup]:
     """
     Build a PUT CREDIT SPREAD setup for a live-tier candidate:
@@ -313,6 +351,11 @@ def generate_spread_setup(
     )
 
     for exp in expirations_sorted:
+        exp_dte = (exp.date() - today).days
+        if earnings_inside_hold(exp_dte, next_earnings_days):
+            _diag(f"{exp.date()}: earnings in {next_earnings_days}d land inside "
+                  f"the {max(0, exp_dte - config.VIRTUAL_FORCE_EXIT_DTE)}d hold")
+            continue
         puts = chain.puts_for_expiration(exp)
         # LIVE tier demands live two-sided quotes — no stale-quote
         # degradation here. That leniency is sandbox-only.
@@ -321,17 +364,32 @@ def generate_spread_setup(
             _diag(f"{exp.date()}: no live two-sided quotes "
                   f"(market closed or data outage — not a market verdict)")
 
+        # OPEN-INTEREST gate — the real-money tier had NO OI floor while the
+        # paper sandbox enforced 500 (measured: 96% of the contracts the live
+        # path would consider sat under the floor, median OI 36; one staged
+        # ticket's short leg had OI 30). Same graceful degradation as the
+        # sandbox: if the whole snapshot reports zero OI, treat it as UNKNOWN
+        # rather than voiding the chain.
+        oi_known = any(p.open_interest > 0 for p in live_quoted)
+
+        def oi_ok(p: OptionContract) -> bool:
+            return (not oi_known) or p.open_interest >= config.MIN_OPEN_INTEREST
+
         # SHORT leg gate: % of mid (this is where the premium lives)
         short_candidates = [
             p for p in live_quoted
-            if p.bid_ask_spread_pct <= config.MAX_BID_ASK_PCT_OF_MID
+            if p.bid_ask_spread_pct <= config.MAX_BID_ASK_PCT_OF_MID and oi_ok(p)
         ]
         # LONG leg gate: cheap wings always look wide in % terms — what
         # costs you is absolute cents. Allow <= $0.05 or <= 10% of mid.
         long_candidates = [
             p for p in live_quoted
-            if (p.ask - p.bid) <= max(0.05, 0.10 * p.mid)
+            if (p.ask - p.bid) <= max(0.05, 0.10 * p.mid) and oi_ok(p)
         ]
+        if live_quoted and not short_candidates:
+            deepest = max((p.open_interest for p in live_quoted), default=0)
+            _diag(f"{exp.date()}: no strike passes both the spread gate and "
+                  f"OI >= {config.MIN_OPEN_INTEREST} (best OI in chain: {deepest})")
         if not short_candidates or len(long_candidates) < 1:
             if live_quoted:
                 _diag(f"{exp.date()}: quotes live but spreads too wide "
@@ -432,13 +490,24 @@ def generate_spread_setup(
         tp_price = round(net_credit_share * (1 - config.VIRTUAL_TP_PCT), 2)
         close_by = (exp.date() - timedelta(days=config.VIRTUAL_FORCE_EXIT_DTE)).isoformat()
 
+        # HONEST NET: `net_after_friction` is the net only if the spread
+        # expires worthless — the one outcome this ticket's own exit plan
+        # forbids (a GTC buyback at 50% and a forced 21-DTE close). Entries
+        # land at 30-37 DTE, so the 21-DTE exit always fires first. The
+        # designed outcome nets ~2.3x LESS. Print both; lead with the one
+        # the attached plan actually delivers.
+        net_at_designed_exit = net_at_tp_exit(credit, "put_credit_spread")
+
         ticket = (
             f"SELL -1 {ticker} {exp_str} {short_leg.strike:g}P / "
             f"BUY +1 {ticker} {exp_str} {long_leg.strike:g}P\n"
             f"LMT @ {net_credit_share:.2f} credit (mid) DAY | "
             f"GTC buyback @ {tp_price:.2f} (50% TP) | "
             f"close by {close_by} (21 DTE)\n"
-            f"Max risk ${max_loss:.0f} | Net credit after friction ~${net_after_friction:.0f}"
+            f"Max risk ${max_loss:.0f} | "
+            f"Net at the attached 50% take-profit ~${net_at_designed_exit:.0f} "
+            f"(${net_after_friction:.0f} only if held to expiry, which this "
+            f"plan does not do)"
         )
 
         quality = ("ibkr_greeks" if (short_leg.source == "ibkr" and short_leg.delta is not None)

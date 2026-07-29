@@ -128,11 +128,28 @@ def _filter_by_period(trades: list[dict], days: Optional[int]) -> list[dict]:
     return out
 
 
-def compute_summary(period_days: Optional[int] = None, period_label: str = "") -> PerformanceSummary:
-    """Compute summary metrics for closed virtual trades in the given period."""
+def compute_summary(
+    period_days: Optional[int] = None,
+    period_label: str = "",
+    tier: Optional[str] = None,
+) -> PerformanceSummary:
+    """
+    Summary metrics for closed virtual trades in the given period.
+
+    tier=None pools both tiers (back-compatible); tier='live'/'sandbox'
+    scores them separately — which is what the playbook's two distinct
+    qualification requirements actually need.
+    """
     from csp_screener.sanity import open_event_is_sane
 
     all_closed = _reconstruct_closed_trades()
+    # Tier filter: live put credit spreads and sandbox cash-secured puts are
+    # NOT the same random variable (a sandbox CSP can lose ~10x its credit;
+    # a gated spread caps near -1.86x). Pooling them makes the tail — the
+    # only part that decides whether this strategy makes money — meaningless.
+    # The playbook also requires the two to qualify separately (changes #5/#8).
+    if tier:
+        all_closed = [t for t in all_closed if (t.get("tier") or "sandbox") == tier]
     closed = _filter_by_period(all_closed, period_days)
     closed_ids = {c["trade_id"] for c in all_closed}
     # Same sanity gate as the closed-trade join — otherwise quarantined
@@ -217,4 +234,8 @@ def all_periods_summary() -> dict[str, PerformanceSummary]:
         "30d": compute_summary(30, "last 30 days"),
         "90d": compute_summary(90, "last 90 days"),
         "all": compute_summary(None, "all-time"),
+        # Per-tier all-time: the pooled number mixes two different payoff
+        # distributions, so the tier splits are the honest scoreboards.
+        "live": compute_summary(None, "all-time (live tier)", tier="live"),
+        "sandbox": compute_summary(None, "all-time (sandbox)", tier="sandbox"),
     }
