@@ -9,7 +9,10 @@ const ITEMS = [
   { href: '/daily', label: 'Live', icon: '🎯' },
   { href: '/candidates', label: 'Planning', icon: '📥' },
   { href: '/portfolio', label: 'Portfolio', icon: '📈' },
-  { href: '/track-record', label: 'Track Record', icon: '🎯' },
+  // 🎯 belongs to Live (it matches the "🎯 TICKET STAGED" alert email).
+  // Track Record gets a ledger icon — on mobile the labels are hidden, so
+  // two tabs sharing an icon would be indistinguishable.
+  { href: '/track-record', label: 'Track Record', icon: '📜' },
   { href: '/learning', label: 'Learning', icon: '🧠' },
   { href: '/system', label: 'System', icon: '🛠️' },
 ];
