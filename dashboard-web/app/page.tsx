@@ -33,9 +33,17 @@ export default async function DashboardPage() {
     };
   });
 
-  // Decision state: does the latest WEEKLY screen have anything to act on?
-  const latestIsWeekly = latest?.run_type !== 'daily';
-  const liveViable = latestIsWeekly ? (latest?.live_viable ?? 0) : 0;
+  // The market-hours DAILY run is the acting signal (real two-sided quotes).
+  // The Sunday run screens at 22:00 UTC where yfinance zeroes bid/ask, so its
+  // live tier structurally cannot stage a ticket. Read live_viable from
+  // whichever run is latest — never gate on run_type (that gate predated the
+  // rhythm inversion and pinned this CTA permanently to "nothing to do").
+  const isDailyRun = latest?.run_type === 'daily';
+  const liveViable = latest?.live_viable ?? 0;
+  const actHref = isDailyRun ? '/daily' : '/candidates';
+  const ranAgoH = latest ? (Date.now() - new Date(latest.ran_at).getTime()) / 3_600_000 : 0;
+  const actionable = liveViable > 0 && isDailyRun && ranAgoH <= 8;
+  const staleTicket = liveViable > 0 && isDailyRun && ranAgoH > 8;
   const liveRiskOpen = openTrades
     .filter(t => t.tier === 'live')
     .reduce((s, t) => s + (Number(t.max_loss) || 0), 0);
@@ -50,15 +58,24 @@ export default async function DashboardPage() {
       </div>
 
       {latest && (
-        <a href="/candidates" className={`block rounded-lg border-2 p-4 transition-colors ${
-          liveViable > 0
+        <a href={actHref} className={`block rounded-lg border-2 p-4 transition-colors ${
+          actionable
             ? 'border-success/60 bg-success/5 hover:bg-success/10'
-            : 'border-accent/50 bg-accent/5 hover:bg-accent/10'
+            : staleTicket
+              ? 'border-warning/60 bg-warning/5 hover:bg-warning/10'
+              : 'border-accent/50 bg-accent/5 hover:bg-accent/10'
         }`}>
           <div className="font-semibold">
-            {liveViable > 0
-              ? `✅ ${liveViable} ticket(s) waiting for approve/reject — see Weekly.`
-              : '🚫 Nothing to do — no real-money trade currently qualified.'}
+            {actionable
+              ? `✅ ${liveViable} qualified spread${liveViable === 1 ? '' : 's'} — approve or reject in IBKR.`
+              : staleTicket
+                ? `⏳ ${liveViable} spread(s) qualified ${Math.round(ranAgoH)}h ago — those limit prices are stale. Wait for the next 15:05 UTC run.`
+                : '🚫 Nothing to do — no real-money trade currently qualified.'}
+          </div>
+          <div className="text-xs text-muted mt-1">
+            {isDailyRun
+              ? 'Staged from live two-sided quotes during market hours — this is the acting signal.'
+              : 'Planning snapshot at the last close. The Sunday run cannot stage tickets; the weekday 15:05 UTC run does.'}
           </div>
           <div className="text-xs text-muted mt-1">
             Live risk in use: ${liveRiskOpen.toFixed(0)} of $200 budget ·{' '}
@@ -102,19 +119,25 @@ export default async function DashboardPage() {
             <div className="flex flex-wrap items-baseline justify-between gap-2">
               <div className="text-sm text-muted">
                 <span className={`mr-2 px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
-                  latest.run_type === 'daily'
-                    ? 'bg-accent/15 text-accent'
-                    : 'bg-success/20 text-success'
+                  isDailyRun
+                    ? 'bg-success/20 text-success'
+                    : 'bg-accent/15 text-accent'
                 }`}>
-                  {latest.run_type === 'daily' ? 'Daily' : 'Weekly'}
+                  {isDailyRun ? 'Live run' : 'Planning'}
                 </span>
                 Ran <span className="text-text font-mono">{new Date(latest.ran_at).toLocaleString()}</span>
               </div>
               <div className="text-sm text-muted">
-                VIX: <span className="text-text">{latest.vix ?? '—'}</span> ·
-                Email sent: <span className={latest.email_sent ? 'text-success' : 'text-warning'}>
-                  {latest.email_sent ? 'yes' : 'no'}
-                </span>
+                VIX: <span className="text-text">{latest.vix ?? '—'}</span> ·{' '}
+                {/* A quiet weekday sends no email by design — only a NEWLY
+                    staged ticket alerts. Amber "no" would read as a failure. */}
+                {latest.email_sent ? (
+                  <>Email sent: <span className="text-success">yes</span></>
+                ) : isDailyRun ? (
+                  <span className="text-muted">No alert — nothing newly staged</span>
+                ) : (
+                  <>Email sent: <span className="text-warning">no</span></>
+                )}
               </div>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4 text-sm">

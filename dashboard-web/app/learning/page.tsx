@@ -141,10 +141,10 @@ export default async function LearningPage() {
       <section className="bg-panel border border-border rounded-lg p-5">
         <h2 className="text-base font-medium mb-2">How the self-learning works</h2>
         <ul className="text-sm text-muted space-y-1 list-disc list-inside">
-          <li>Every Sunday screen opens virtual positions for the top 5 candidates</li>
-          <li>The daily check marks them to market and closes when exit rules fire</li>
+          <li>Every screen — weekday and Sunday — opens virtual positions for qualifying candidates (one per ticker, up to 24 open)</li>
+          <li>Hourly checks mark them against real option quotes and close when exit rules fire</li>
           <li>Every closed trade gets logged with its features (delta, DTE, RV, VIX)</li>
-          <li>Next Sunday, the ranker boosts tickers with strong history and de-prioritizes chronic losers</li>
+          <li>On the next screen, the ranker boosts tickers with strong history and de-prioritizes chronic losers</li>
           <li>The recommender surfaces feature buckets that are over-/under-performing</li>
           <li>Threshold changes are <b>never</b> auto-applied — 14-day cooldown enforced via pre-commit hook</li>
         </ul>

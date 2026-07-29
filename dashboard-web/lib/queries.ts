@@ -183,6 +183,18 @@ export function computePerformance(trades: ClosedVirtualTrade[]) {
   };
 }
 
+/**
+ * Was a close marked against a REAL option quote, or the Black-Scholes
+ * fallback? Parsed from the close note (virtual_tracker writes
+ * "…, mark_source=market|model, model_price=…"). Only market-marked
+ * closes are evidence for the go-live decision — the model admits it
+ * "prices profits too early".
+ */
+export function markSource(t: { notes?: string | null }): 'market' | 'model' | null {
+  const m = /mark_source=(market|model)/.exec(t.notes ?? '');
+  return (m?.[1] as 'market' | 'model') ?? null;
+}
+
 export function filterTradesByDays(trades: ClosedVirtualTrade[], days: number | null): ClosedVirtualTrade[] {
   if (!days) return trades;
   const cutoff = Date.now() - days * 86_400_000;

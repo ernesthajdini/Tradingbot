@@ -126,6 +126,9 @@ export interface ClosedVirtualTrade {
   tier?: 'live' | 'sandbox' | null;
   pnl_pessimistic?: number | null;
   pnl_eur?: number | null;
+  // "days_held=…, dte_at_open=…, mark_source=market|model, model_price=…"
+  // (written by virtual_tracker.close_virtual_position)
+  notes?: string | null;
 }
 
 export interface SystemEvent {

@@ -1,11 +1,13 @@
 import type { CandidatePayload, VirtualSetup } from '@/lib/types';
 
 /**
- * Shared two-tier candidate renderer used by /candidates (weekly) and
- * /daily (daily indications). Pure display — data fetching stays in pages.
+ * Shared two-tier candidate renderer used by /daily and /candidates.
  *
- * context='daily' de-emphasizes live tickets (informational read; the
- * Sunday email is the acting signal).
+ * context='daily' is the ACTING run (mid-session, live two-sided quotes,
+ * sends the 🎯 ticket alert). context='weekly' is the Sunday planning
+ * snapshot at the last close — it structurally cannot stage a ticket,
+ * because after-hours bid/ask are zeroed and the live tier voids before
+ * any gate is evaluated.
  */
 
 // Display-only mirrors of config.py playbook caps (not tunable here)
@@ -179,18 +181,18 @@ export function ScreenCandidates({
   return (
     <div className="space-y-8">
       <section>
-        <h2 className={`text-lg font-medium ${isDaily ? '' : 'text-success'}`}>
+        <h2 className={`text-lg font-medium ${isDaily ? 'text-success' : ''}`}>
           {isDaily
-            ? 'Live-tier read (informational) — the Sunday email is your acting signal'
-            : 'Real-money candidates — staged tickets'}
+            ? 'Real-money candidates — staged from live quotes'
+            : 'Planning snapshot — last close, cannot stage'}
           {liveViable.length === 0 && (
             <span className="ml-2 text-muted font-normal">· nothing qualified</span>
           )}
         </h2>
         <p className="text-xs text-muted mt-1 mb-3">
           {isDaily
-            ? 'Same gates as Sunday, but prices are today’s close — by tomorrow’s open they are stale. Treat as a preview, not a ticket.'
-            : 'Liquid $20–60 names as defined-risk put credit spreads. Only shown when every gate passed (net credit ≥ $25 after friction, friction ≤ 20%, live quotes). Your only move in IBKR: approve or reject.'}
+            ? 'Liquid $20–60 names as defined-risk put credit spreads, screened mid-session against real two-sided quotes. Only shown when every gate passed (net credit ≥ $25 after friction, friction ≤ 20%, live quotes). Your only move in IBKR: approve or reject — never retype a ticket.'
+            : 'Same gates, but this run screens after the close, where bid/ask are zeroed — the live tier voids before any gate is evaluated. Planning only; tickets come from the weekday 15:05 UTC run.'}
         </p>
         {liveCands.length === 0 ? (
           <div className="text-sm text-muted">No live-tier candidates recorded.</div>
@@ -200,7 +202,7 @@ export function ScreenCandidates({
               const viableIndex = liveViable.indexOf(c); // -1 if not viable
               return (
                 <div key={`${c.ticker}-${c.rank}`} className={`bg-panel border rounded-lg p-5 ${
-                  c.setup && !isDaily ? 'border-success/60' : 'border-border'
+                  c.setup ? 'border-success/60' : 'border-border'
                 }`}>
                   <div className="flex items-baseline justify-between">
                     <span className="text-lg font-mono font-semibold">{c.ticker}
@@ -209,12 +211,12 @@ export function ScreenCandidates({
                       </span>
                     </span>
                     <span className="inline-flex gap-1">
-                      {c.setup && viableIndex === 0 && !isDaily && (
+                      {c.setup && viableIndex === 0 && (
                         <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-warning/25 text-warning">
                           ★ Best pick
                         </span>
                       )}
-                      {c.setup && viableIndex > 0 && !isDaily && (
+                      {c.setup && viableIndex > 0 && (
                         <span className="px-2 py-0.5 rounded text-[10px] font-semibold uppercase bg-border/50 text-muted">
                           Backup #{viableIndex + 1}
                         </span>
@@ -222,11 +224,11 @@ export function ScreenCandidates({
                       <span className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
                         c.setup ? 'bg-success/20 text-success' : 'bg-border/50 text-muted'
                       }`}>
-                        {c.setup ? (isDaily ? 'QUALIFIED' : 'TICKET STAGED') : 'NO SPREAD'}
+                        {c.setup ? 'TICKET STAGED' : 'NO SPREAD'}
                       </span>
                     </span>
                   </div>
-                  {c.setup && viableIndex > 0 && !isDaily && (
+                  {c.setup && viableIndex > 0 && (
                     <div className="mt-1 text-xs text-muted">
                       Take only if the best pick won&apos;t fill at its limit — never both; the
                       budget allows one.
@@ -235,7 +237,7 @@ export function ScreenCandidates({
                   {c.setup ? (
                     <>
                       <TradeInPlainEnglish s={c.setup} spot={c.last_price} tier="live" />
-                      {c.setup.ticket && !isDaily && (
+                      {c.setup.ticket && (
                         <>
                           <div className="mt-3 text-xs text-muted">
                             The exact staged order (approve or reject in IBKR — never retype it):

@@ -19,11 +19,12 @@ export default async function DailyPage() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-2xl font-semibold">Daily indications</h1>
+        <h1 className="text-2xl font-semibold">Live tickets</h1>
         <p className="text-sm text-muted mt-1">
-          Same screen as Sunday, run every weekday after the close. No email — this tab is the
-          only surface. Qualifying names open paper positions automatically (one per ticker), so
-          the track record grows daily instead of weekly.
+          Screened every weekday at 15:05 UTC — mid-session, against real two-sided quotes.
+          This is the acting run: when a spread passes every gate it stages an order ticket
+          here and sends the 🎯 alert email. Qualifying names also open paper positions
+          automatically (one per ticker) to grow the track record.
         </p>
         <p className="text-sm text-muted mt-1">
           Last daily run:{' '}
@@ -50,9 +51,9 @@ export default async function DailyPage() {
         <ScreenCandidates candidates={candidates} context="daily" />
       ) : (
         <div className="bg-panel border border-border rounded-lg p-8 text-center text-muted">
-          No daily runs yet. The first one lands after the next market close
-          (GitHub Actions, Mon–Fri) — or trigger the “daily-screen” job manually
-          from the Actions tab.
+          No daily runs yet. The first one lands at 15:05 UTC on the next trading day
+          (GitHub Actions, Mon–Fri) — or trigger the “daily-check” job manually from
+          the Actions tab.
         </div>
       )}
 

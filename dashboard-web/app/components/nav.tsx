@@ -6,8 +6,8 @@ import { createClient } from '@/lib/supabase/client';
 
 const ITEMS = [
   { href: '/', label: 'Dashboard', icon: '📊' },
-  { href: '/candidates', label: 'Weekly', icon: '📥' },
-  { href: '/daily', label: 'Daily', icon: '📅' },
+  { href: '/daily', label: 'Live', icon: '🎯' },
+  { href: '/candidates', label: 'Planning', icon: '📥' },
   { href: '/portfolio', label: 'Portfolio', icon: '📈' },
   { href: '/track-record', label: 'Track Record', icon: '🎯' },
   { href: '/learning', label: 'Learning', icon: '🧠' },

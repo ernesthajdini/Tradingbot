@@ -1,7 +1,7 @@
 export const revalidate = 60;
 
 import {
-  fetchClosedVirtualTrades, computePerformance, filterTradesByDays,
+  fetchClosedVirtualTrades, computePerformance, filterTradesByDays, markSource,
 } from '@/lib/queries';
 import { MetricCard } from '../components/metric-card';
 
@@ -60,6 +60,7 @@ export default async function TrackRecordPage() {
   const all = computePerformance(closed);
   const last90 = computePerformance(filterTradesByDays(closed, 90));
   const last30 = computePerformance(filterTradesByDays(closed, 30));
+  const marketMarked = closed.filter(t => markSource(t) === 'market').length;
 
   return (
     <div className="space-y-8">
@@ -76,6 +77,16 @@ export default async function TrackRecordPage() {
         <PeriodCard label="Last 90 days" perf={last90} />
         <PeriodCard label="All-time" perf={all} />
       </section>
+
+      {all.count > 0 && (
+        <div className="text-xs text-muted">
+          <span className={marketMarked === 0 ? 'text-warning' : 'text-text'}>
+            {marketMarked} of {all.count} closes ({Math.round((marketMarked / all.count) * 100)}%)
+          </span>{' '}
+          were marked against a real option quote — the rest fell back to the pricing model,
+          which prices profits too early. Only market-marked closes are evidence for going live.
+        </div>
+      )}
 
       {all.count > 0 && (
         <>
@@ -153,6 +164,7 @@ export default async function TrackRecordPage() {
                     <th className="text-right py-3 px-4">Strike</th>
                     <th className="text-right py-3 px-4">Days held</th>
                     <th className="text-left py-3 px-4">Reason</th>
+                    <th className="text-center py-3 px-4">Mark</th>
                     <th className="text-right py-3 px-4">PnL</th>
                     <th className="text-right py-3 px-4">% of credit</th>
                   </tr>
@@ -165,6 +177,15 @@ export default async function TrackRecordPage() {
                       <td className="py-3 px-4 text-right font-mono">${Number(t.strike).toFixed(2)}</td>
                       <td className="py-3 px-4 text-right">{Math.round(Number(t.days_held) || 0)}</td>
                       <td className="py-3 px-4 text-xs text-muted font-mono">{t.exit_reason}</td>
+                      <td className="py-3 px-4 text-center">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                          markSource(t) === 'market' ? 'bg-success/20 text-success'
+                            : markSource(t) === 'model' ? 'bg-warning/20 text-warning'
+                              : 'bg-border/50 text-muted'
+                        }`}>
+                          {markSource(t) ?? 'n/a'}
+                        </span>
+                      </td>
                       <td className={`py-3 px-4 text-right font-mono ${
                         Number(t.pnl) > 0 ? 'text-success' : 'text-danger'
                       }`}>${Number(t.pnl).toFixed(2)}</td>
