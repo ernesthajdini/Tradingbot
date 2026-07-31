@@ -252,3 +252,70 @@ def test_bucket_recommendation_requires_pnl_agreement():
     buckets = feature_analyzer.analyze_features(trades)
     recs = recommender.recommend_from_buckets(buckets, {"win_rate": 0.5})
     assert all("weighting toward" not in r.detail for r in recs)
+
+
+# ---------------------------------------------------------------------------
+# Go-live gate in code + the credit gate measured at the designed exit
+# ---------------------------------------------------------------------------
+
+def test_gate_is_shut_before_the_playbook_date_and_sample():
+    from csp_screener import golive
+    st = golive.gate_status()
+    assert st["passed"] is False
+    assert not golive.is_open()
+    keys = {c["key"] for c in st["checks"]}
+    assert keys == {"sample", "date", "expectancy", "evidence_quality"}
+    assert "🔒" in golive.headline(st)
+
+
+def test_gate_opens_only_when_every_condition_is_met(monkeypatch):
+    from datetime import date
+    from csp_screener import evaluator, golive, queries_helpers
+
+    class _Summary:
+        closed_count = 250
+        total_pnl_pessimistic = 250.0  # +$1.00/trade at the pessimistic band
+
+    monkeypatch.setattr(evaluator, "compute_summary", lambda *a, **k: _Summary())
+    monkeypatch.setattr(queries_helpers, "market_marked_share", lambda: 0.9)
+    assert golive.gate_status(today=date(2027, 2, 1))["passed"] is True
+    # Any single condition failing shuts it again
+    assert golive.gate_status(today=date(2026, 12, 31))["passed"] is False
+    monkeypatch.setattr(queries_helpers, "market_marked_share", lambda: 0.1)
+    assert golive.gate_status(today=date(2027, 2, 1))["passed"] is False
+
+
+def test_gate_failure_never_implies_go(monkeypatch):
+    from csp_screener import golive
+    monkeypatch.setattr(golive, "gate_status",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert golive.is_open() is False  # fails CLOSED
+
+
+def test_ticket_says_research_signal_while_the_gate_is_shut():
+    chain = OptionsChain(
+        ticker="X", spot=26.0, expirations=[EXP], source="yfinance",
+        puts=[_put(24.0, 1.30, -0.28, oi=4000), _put(22.0, 0.20, -0.12, oi=3000)])
+    s = generate_spread_setup("X", 26.0, chain, next_earnings_days=90)
+    assert s is not None
+    assert "RESEARCH SIGNAL" in s.ticket
+    assert "NOT approved for real money" in s.ticket
+    # The order details are still there — the signal is not hidden
+    assert "SELL -1 X" in s.ticket
+
+
+def test_credit_gate_now_measured_at_the_designed_exit():
+    from csp_screener import config
+    # A spread whose hold-to-expiry net clears $25 but whose 50% take-profit
+    # (the exit the ticket attaches) does not, must now VOID.
+    chain = OptionsChain(
+        ticker="X", spot=26.0, expirations=[EXP], source="yfinance",
+        puts=[_put(24.0, 0.70, -0.28, oi=4000), _put(23.0, 0.20, -0.16, oi=3000)])
+    diags: list = []
+    setup = generate_spread_setup("X", 26.0, chain, diagnostics=diags)
+    gross = 50.0
+    assert gross - (4 * config.COMMISSION_PER_CONTRACT
+                    + 2 * config.SLIPPAGE_PCT_OF_PREMIUM * gross) >= 25.0  # old basis passed
+    assert net_at_tp_exit(gross, "put_credit_spread") < 25.0              # new basis fails
+    assert setup is None
+    assert any("take-profit" in d for d in diags)

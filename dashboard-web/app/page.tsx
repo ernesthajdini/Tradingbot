@@ -12,6 +12,9 @@ import { PnlChart } from './components/pnl-chart';
 // The risk budget is 8% of equity (playbook Section 4: caps are percentages).
 const ACCOUNT_EQUITY = 1200;
 const RISK_BUDGET = Math.min(200, 0.08 * ACCOUNT_EQUITY);
+// Mirrors csp_screener/golive.py — real money is not authorised until both.
+const GATE_REQUIRED_TRADES = 200;
+const GATE_OPENS = '2027-01-01';
 
 export default async function DashboardPage() {
   const [latest, openTrades, closed] = await Promise.all([
@@ -52,6 +55,9 @@ export default async function DashboardPage() {
   const liveRiskOpen = openTrades
     .filter(t => t.tier === 'live')
     .reduce((s, t) => s + (Number(t.max_loss) || 0), 0);
+  // Mirrors golive.gate_status(): both conditions must hold.
+  const gateOpen = allTime.count >= GATE_REQUIRED_TRADES
+    && new Date() >= new Date(GATE_OPENS);
 
   return (
     <div className="space-y-8">
@@ -60,6 +66,28 @@ export default async function DashboardPage() {
         <p className="text-sm text-muted mt-1">
           Quick overview of screener state and virtual track record.
         </p>
+      </div>
+
+      {/* Go-live gate: the single most important piece of context on the
+          page — every "signal" below is research until this passes. */}
+      <div className="rounded-lg border border-border bg-panel p-4">
+        <div className="flex items-baseline justify-between gap-2 flex-wrap">
+          <span className="font-semibold">
+            {gateOpen
+              ? '✅ Go-live gate PASSED — staged tickets are approvable.'
+              : '🔬 Research mode — real money is not authorised yet.'}
+          </span>
+          <span className="text-xs text-muted font-mono">
+            {allTime.count}/{GATE_REQUIRED_TRADES} paper trades · opens {GATE_OPENS}
+          </span>
+        </div>
+        <div className="mt-2 h-2 rounded bg-border/40 overflow-hidden">
+          <div className="h-full rounded bg-accent"
+               style={{ width: `${Math.min(100, (allTime.count / GATE_REQUIRED_TRADES) * 100)}%` }} />
+        </div>
+        <div className="mt-1 text-xs text-muted">
+          Signals are real analysis and are tracked as paper trades — they are not orders to place.
+        </div>
       </div>
 
       {latest && (

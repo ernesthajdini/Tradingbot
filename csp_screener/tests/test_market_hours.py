@@ -356,6 +356,8 @@ def test_ticket_alert_renders_with_best_pick():
     flags = {"live_risk_open": 0.0, "budget_cap": 200.0, "slots_used": 0,
              "slots_max": 2, "max_risk_per_spread": 130.0, "market_open": True}
     subject, html = notify.render_ticket_alert(live, flags)
-    assert "TICKET STAGED" in subject and "DKNG" in subject
+    # Gate is shut in tests -> the subject must NOT say TAKE
+    assert "Research signal" in subject and "DKNG" in subject
+    assert "TAKE" not in subject
     assert "BEST PICK" in html
     assert "RISK BUDGET" in html

@@ -491,6 +491,46 @@ def render_live_section(
     return "".join(blocks)
 
 
+def render_golive_banner() -> str:
+    """Gate status — so no email ever implies real money is authorised."""
+    try:
+        from csp_screener import golive
+        st = golive.gate_status()
+    except Exception:
+        return ""
+    if st["passed"]:
+        return (
+            "<div style='padding:12px;margin:12px 0;background:#dafbe1;"
+            "border:2px solid #2da44e;border-radius:6px;font-weight:600;'>"
+            "✅ Go-live gate PASSED — staged tickets are approvable.</div>"
+        )
+    rows = "".join(
+        f"<div style='font-size:12px;color:#57606a;padding:2px 0;'>"
+        f"{'✅' if c['passed'] else '⬜'} {escape(c['label'])} — "
+        f"{escape(c['detail'])}</div>"
+        for c in st["checks"]
+    )
+    pct = st["progress_pct"]
+    return f"""
+    <div style="padding:12px;margin:12px 0;background:#f6f8fa;
+                border:1px solid #d0d7de;border-radius:6px;">
+      <div style="font-weight:600;">🔬 Research mode — real money is not
+        authorised yet.</div>
+      <div style="font-size:12px;color:#57606a;margin:4px 0 8px;">
+        Signals below are real analysis and are tracked as paper trades.
+        They are NOT orders to place. The gate below opens them.
+      </div>
+      <div style="height:8px;background:#eaeef2;border-radius:4px;overflow:hidden;">
+        <div style="height:8px;width:{pct*100:.0f}%;background:#0969da;"></div>
+      </div>
+      <div style="font-size:11px;color:#6e7781;margin:4px 0 6px;">
+        {st['closed_trades']} of {st['required_trades']} paper trades
+        ({pct*100:.0f}%)
+      </div>
+      {rows}
+    </div>"""
+
+
 def render_bottom_line(flags: dict) -> str:
     """
     One box at the very top that answers 'what do I need to know / do?'
@@ -594,10 +634,20 @@ def render_ticket_alert(live_candidates: list[dict], flags: dict) -> tuple[str, 
         s["estimated_credit_per_contract"],
         s.get("structure") or "csp")  # what the attached exit plan delivers
     others = f", {len(viable) - 1} backup(s)" if len(viable) > 1 else ""
-    subject = (
-        f"[CSP Screener] 🎯 TICKET STAGED — TAKE {best['ticker']} "
-        f"(${credit:.0f} credit, ${s['max_loss_per_contract']:.0f} risk){others}"
-    )
+    from csp_screener import golive
+    gate = golive.gate_status()
+    if gate["passed"]:
+        subject = (
+            f"[CSP Screener] 🎯 TICKET STAGED — TAKE {best['ticker']} "
+            f"(${credit:.0f} credit, ${s['max_loss_per_contract']:.0f} risk){others}"
+        )
+    else:
+        # Never write "TAKE" while the playbook forbids real money.
+        subject = (
+            f"[CSP Screener] 🔬 Research signal — {best['ticker']} "
+            f"(${credit:.0f} net, ${s['max_loss_per_contract']:.0f} risk){others} "
+            f"· gate {gate['closed_trades']}/{gate['required_trades']}"
+        )
     bottom = render_bottom_line(dict(flags, live_viable_count=len(viable)))
     live_html = render_live_section(live_candidates, False, flags)
     html = f"""
@@ -608,6 +658,7 @@ def render_ticket_alert(live_candidates: list[dict], flags: dict) -> tuple[str, 
         Generated {datetime.now().strftime('%Y-%m-%d %H:%M')} UTC during US market
         hours. Unlike the Sunday digest, these prices are live right now.
       </p>
+      {render_golive_banner()}
       {bottom}
       {live_html}
       <p style="font-size:11px;color:#6e7781;margin-top:16px;">
@@ -718,6 +769,7 @@ def render_full_email(
         quotes.
       </p>
 
+      {render_golive_banner()}
       {bottom_line}
       {health_html}
       {banners}

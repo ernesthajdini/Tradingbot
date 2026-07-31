@@ -27,11 +27,11 @@ def _put(strike, bid, ask, oi, exp, delta=None):
 def _spread_chain(spot=25.0):
     exp = datetime.now() + timedelta(days=35)
     chain = OptionsChain(ticker="T", spot=spot, expirations=[exp])
-    # Rich-IV chain: gates demand ~$40+ net credit (4x$1 commissions + 10%
-    # slippage must stay <=20% of credit), so premiums here reflect an
-    # elevated-vol name — exactly the regime the screener selects for.
+    # Rich-IV chain. The credit floor is now measured at the 50% take-profit
+    # (the exit the ticket attaches), so a viable $2-wide needs ~$70 gross:
+    # net@TP $25.75 >= $25 floor, and risk $130 <= the structural ceiling.
     chain.puts = [
-        _put(24.0, 0.62, 0.64, 2000, exp, delta=-0.30),
+        _put(24.0, 0.78, 0.80, 2000, exp, delta=-0.30),
         _put(23.0, 0.19, 0.21, 1500, exp, delta=-0.16),
         _put(22.0, 0.08, 0.10, 900, exp, delta=-0.09),
     ]
@@ -49,11 +49,11 @@ def test_generate_spread_setup_builds_viable_spread():
     assert s.structure == "put_credit_spread"
     assert s.tier == "live"
     assert s.strike == 24.0
-    assert s.long_strike == 23.0
-    # Credit = (0.63 - 0.20) * 100 = 43
-    assert s.estimated_credit_per_contract == pytest.approx(43.0, abs=0.5)
-    # Max loss = width*100 - credit = 100 - 43 = 57
-    assert s.max_loss_per_contract == pytest.approx(57.0, abs=1.0)
+    assert s.long_strike == 22.0
+    # Credit = (0.79 - 0.09) * 100 = 70
+    assert s.estimated_credit_per_contract == pytest.approx(70.0, abs=1.0)
+    # $2-wide chosen: max loss = 200 - 70 = 130 (at the ceiling)
+    assert s.max_loss_per_contract == pytest.approx(130.0, abs=1.0)
     assert s.ticket and "SELL -1 T" in s.ticket and "BUY +1 T" in s.ticket
     assert s.net_credit_after_friction is not None
     assert s.net_credit_after_friction >= config.MIN_NET_CREDIT_AFTER_FRICTION
@@ -75,11 +75,11 @@ def test_spread_rejected_without_live_quotes():
     chain = OptionsChain(ticker="T", spot=25.0, expirations=[exp])
     # Stale weekend quotes (bid=ask=0): sandbox tolerates, LIVE must not
     c1 = OptionContract(ticker="T", expiration=exp, strike=24.0, right="P",
-                        bid=0, ask=0, last=0.59, mid=0.59,
+                        bid=0, ask=0, last=0.99, mid=0.99,
                         open_interest=2000, volume=0, iv=0.4, delta=-0.3,
                         source="yfinance")
     c2 = OptionContract(ticker="T", expiration=exp, strike=23.0, right="P",
-                        bid=0, ask=0, last=0.25, mid=0.25,
+                        bid=0, ask=0, last=0.15, mid=0.15,
                         open_interest=1500, volume=0, iv=0.4, delta=-0.18,
                         source="yfinance")
     chain.puts = [c1, c2]
@@ -108,7 +108,7 @@ def test_spread_open_close_lifecycle_with_structure():
     assert len(trades) == 1
     t = trades[0]
     assert t.structure == "put_credit_spread"
-    assert t.long_strike == 23.0
+    assert t.long_strike == 22.0
     assert t.tier == "live"
 
 
@@ -119,7 +119,7 @@ def test_spread_value_capped_by_long_leg():
     t = virtual_tracker.get_open_virtual_trades()[0]
     # Crash spot to $15 — naked 24P would be ~$9; spread caps near $1 width
     res = virtual_tracker.evaluate_open_position(t, current_spot=15.0, current_iv=0.6)
-    assert res["current_put_price"] <= 1.0 * 100 + 5  # width + tolerance
+    assert res["current_put_price"] <= 2.0 * 100 + 5  # width + tolerance
 
 
 def test_spread_friction_uses_four_legs():

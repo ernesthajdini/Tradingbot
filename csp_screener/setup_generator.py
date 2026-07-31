@@ -475,15 +475,20 @@ def generate_spread_setup(
             fr = 4 * config.COMMISSION_PER_CONTRACT + \
                 2 * config.SLIPPAGE_PCT_OF_PREMIUM * cr
             naf = cr - fr
-            # Viability gates (playbook change #7)
-            if naf < config.MIN_NET_CREDIT_AFTER_FRICTION:
+            # Viability gates (playbook change #7). The floor is measured on
+            # what the trade ACTUALLY nets at its own designed exit — the
+            # attached 50% take-profit — not on the expire-worthless number.
+            # Measuring the latter let a "$25 net" ticket really deliver ~$14.
+            net_designed = net_at_tp_exit(cr, "put_credit_spread")
+            if net_designed < config.MIN_NET_CREDIT_AFTER_FRICTION:
                 _diag(f"{exp.date()}: ${w:g}-wide at {short_leg.strike:g}/"
-                      f"{cand.strike:g} nets ${naf:.0f} after friction vs the "
-                      f"${config.MIN_NET_CREDIT_AFTER_FRICTION:.0f} floor "
-                      f"(credit ${cr:.0f}, friction ${fr:.2f}) — NEAR MISS"
-                      if naf > 0 else
-                      f"{exp.date()}: ${w:g}-wide credit ${cr:.0f} fully "
-                      f"consumed by ${fr:.2f} friction")
+                      f"{cand.strike:g} nets ${net_designed:.0f} at its 50% "
+                      f"take-profit vs the ${config.MIN_NET_CREDIT_AFTER_FRICTION:.0f} "
+                      f"floor (credit ${cr:.0f}; ${naf:.0f} only if held to "
+                      f"expiry) — NEAR MISS"
+                      if net_designed > 0 else
+                      f"{exp.date()}: ${w:g}-wide credit ${cr:.0f} cannot "
+                      f"survive its own exit friction (${fr:.2f})")
                 continue
             if fr > config.MAX_FRICTION_PCT_OF_CREDIT * cr:
                 _diag(f"{exp.date()}: friction ${fr:.2f} is "
@@ -518,9 +523,22 @@ def generate_spread_setup(
         # the attached plan actually delivers.
         net_at_designed_exit = net_at_tp_exit(credit, "put_credit_spread")
 
+        # The go-live gate decides what this text CLAIMS to be. Before the
+        # gate opens it is a research signal, never an order to place.
+        from csp_screener import golive
+        gate = golive.gate_status()
+        if gate["passed"]:
+            header = (f"SELL -1 {ticker} {exp_str} {short_leg.strike:g}P / "
+                      f"BUY +1 {ticker} {exp_str} {long_leg.strike:g}P")
+        else:
+            header = (
+                f"RESEARCH SIGNAL — NOT approved for real money\n"
+                f"({gate['closed_trades']}/{gate['required_trades']} paper "
+                f"trades · gate opens {gate['earliest_date']})\n"
+                f"Would be: SELL -1 {ticker} {exp_str} {short_leg.strike:g}P / "
+                f"BUY +1 {ticker} {exp_str} {long_leg.strike:g}P")
         ticket = (
-            f"SELL -1 {ticker} {exp_str} {short_leg.strike:g}P / "
-            f"BUY +1 {ticker} {exp_str} {long_leg.strike:g}P\n"
+            f"{header}\n"
             f"LMT @ {net_credit_share:.2f} credit (mid) DAY | "
             f"GTC buyback @ {tp_price:.2f} (50% TP) | "
             f"close by {close_by} (21 DTE)\n"
