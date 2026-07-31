@@ -446,9 +446,17 @@ def generate_spread_setup(
                 continue
             cr = ncs * 100.0
             ml = w * 100.0 - cr
-            if ml > config.MAX_RISK_PER_SPREAD:
+            # Equity-scaled cap: config's $130 was sized for the projected
+            # $2.6K January-2027 balance. On today's equity the playbook's
+            # 5% rule binds tighter, and percentages are the playbook's
+            # stated invariant.
+            from csp_screener import account
+            risk_cap = account.max_risk_per_trade()
+            if ml > risk_cap:
                 _diag(f"{exp.date()}: ${w:g}-wide risks ${ml:.0f} > "
-                      f"${config.MAX_RISK_PER_SPREAD:.0f} cap")
+                      f"${risk_cap:.0f} cap "
+                      f"({account.MAX_RISK_PCT_PER_TRADE:.0%} of "
+                      f"${account.current_equity():,.0f} equity)")
                 continue
             # Friction: 2 legs open + 2 legs close = 4 contracts of commission,
             # plus slippage on the credit both ways.

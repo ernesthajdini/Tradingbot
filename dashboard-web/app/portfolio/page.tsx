@@ -3,10 +3,14 @@ export const revalidate = 60;
 import { fetchOpenVirtualTrades } from '@/lib/queries';
 import { MetricCard } from '../components/metric-card';
 
-// Display-only mirrors of config.py playbook caps (not tunable here)
-const BUDGET_CAP = 200;   // MAX_TOTAL_PREMIUM_AT_RISK
-const SLOTS_MAX = 2;      // MAX_OPEN_POSITIONS
-const MAX_RISK_PER_SPREAD = 130;
+// Display-only mirrors of csp_screener/account.py. $200/month is the
+// DEPOSIT, not the budget — the risk budget is a percentage of equity
+// (5% per trade, 8% total), which is what the playbook actually specifies.
+const ACCOUNT_EQUITY = 1200;
+const MONTHLY_DEPOSIT = 200;
+const BUDGET_CAP = Math.min(200, 0.08 * ACCOUNT_EQUITY);
+const SLOTS_MAX = 2;
+const MAX_RISK_PER_SPREAD = Math.min(130, 0.05 * ACCOUNT_EQUITY);
 
 export default async function PortfolioPage() {
   const open = await fetchOpenVirtualTrades();
@@ -42,7 +46,11 @@ export default async function PortfolioPage() {
             />
           </div>
           <div className="mt-1 text-xs text-muted">
-            {riskPct}% used · a new spread costs up to ${MAX_RISK_PER_SPREAD}
+            {riskPct}% of budget used · a new spread costs up to ${MAX_RISK_PER_SPREAD}
+          </div>
+          <div className="mt-1 text-[11px] text-muted">
+            Budget is 8% of the ${ACCOUNT_EQUITY.toLocaleString()} account.
+            ${MONTHLY_DEPOSIT}/mo deposits raise it as they land.
           </div>
         </div>
         <MetricCard

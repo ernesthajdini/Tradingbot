@@ -67,7 +67,11 @@ def test_no_trade_banner_says_quotes_unavailable_when_market_closed():
 # Near-miss ledger diagnostics
 # ---------------------------------------------------------------------------
 
-def test_near_miss_ledger_reports_credit_vs_floor():
+def test_near_miss_ledger_reports_credit_vs_floor(monkeypatch):
+    # $2-wide spreads only fit once equity reaches the balance the
+    # $130 cap assumes ($2.6K). This test is about the other gates.
+    from csp_screener import account
+    monkeypatch.setattr(account, "CURRENT_EQUITY", 2600.0)
     # $1-wide netting $20 gross: risk $80 (under the $130 cap) but only
     # $14 after friction — below the $25 floor. Must produce a NEAR MISS
     # diagnostic with the numbers, not a silent void.
@@ -81,7 +85,11 @@ def test_near_miss_ledger_reports_credit_vs_floor():
     assert any("NEAR MISS" in d for d in diags)
 
 
-def test_near_miss_ledger_reports_risk_cap():
+def test_near_miss_ledger_reports_risk_cap(monkeypatch):
+    # $2-wide spreads only fit once equity reaches the balance the
+    # $130 cap assumes ($2.6K). This test is about the other gates.
+    from csp_screener import account
+    monkeypatch.setattr(account, "CURRENT_EQUITY", 2600.0)
     # $2-wide netting $55: friction passes but risk $145 > the $130 cap —
     # the ledger must say so with numbers.
     chain = _chain(25.0, [
@@ -107,7 +115,11 @@ def test_live_path_delta_cap_rejects_near_money_short_leg():
     assert setup is None or setup.strike != 24.5
 
 
-def test_viable_spread_still_generates():
+def test_viable_spread_still_generates(monkeypatch):
+    # $2-wide spreads only fit once equity reaches the balance the
+    # $130 cap assumes ($2.6K). This test is about the other gates.
+    from csp_screener import account
+    monkeypatch.setattr(account, "CURRENT_EQUITY", 2600.0)
     # $2-wide netting $75: risk $125 ≤ $130 cap, friction $11.50 ≤ 20% of
     # credit, net $63.50 ≥ $25 floor — every gate passes.
     chain = _chain(26.0, [

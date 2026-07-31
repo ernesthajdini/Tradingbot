@@ -8,6 +8,11 @@ import {
 import { MetricCard } from './components/metric-card';
 import { PnlChart } from './components/pnl-chart';
 
+// Mirrors csp_screener/account.py — $200/mo is the DEPOSIT, not the budget.
+// The risk budget is 8% of equity (playbook Section 4: caps are percentages).
+const ACCOUNT_EQUITY = 1200;
+const RISK_BUDGET = Math.min(200, 0.08 * ACCOUNT_EQUITY);
+
 export default async function DashboardPage() {
   const [latest, openTrades, closed] = await Promise.all([
     fetchLatestScreen(),
@@ -78,7 +83,8 @@ export default async function DashboardPage() {
               : 'Planning snapshot at the last close. The Sunday run cannot stage tickets; the weekday 15:05 UTC run does.'}
           </div>
           <div className="text-xs text-muted mt-1">
-            Live risk in use: ${liveRiskOpen.toFixed(0)} of $200 budget ·{' '}
+            Live risk in use: ${liveRiskOpen.toFixed(0)} of ${RISK_BUDGET} budget
+            (8% of the ${ACCOUNT_EQUITY.toLocaleString()} account) ·{' '}
             {openTrades.filter(t => t.tier === 'live').length} of 2 live slots
           </div>
         </a>

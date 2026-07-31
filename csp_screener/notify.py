@@ -523,16 +523,26 @@ def render_bottom_line(flags: dict) -> str:
         slots_used = flags.get("slots_used", 0)
         slots_max = flags.get("slots_max", 2)
         per_trade = flags.get("max_risk_per_spread", 130)
+        equity = flags.get("equity")
         slots_free = max(0, slots_max - slots_used)
         budget_free = max(0.0, cap - used)
         max_approvals = min(slots_free, int(budget_free // per_trade)) if per_trade else 0
+        # Anchor the budget to the ACCOUNT, not to a bare dollar figure that
+        # reads like the whole balance. $200/mo is the deposit, not the budget.
+        equity_line = (
+            f"Account ≈ ${equity:,.0f}. Risk budget is {cap / equity:.0%} of it "
+            f"(${per_trade:.0f} max per trade). Deposits of "
+            f"${flags.get('monthly_deposit', 200):.0f}/month raise both as they land."
+            if equity else ""
+        )
         budget_html = f"""
       <div style="font-size:13px;margin-top:10px;padding:8px 12px;background:#ffffffaa;
                   border-radius:6px;">
-        <b>RISK BUDGET</b> — ${used:.0f} of ${cap:.0f} in use · {slots_used} of
+        <b>RISK BUDGET</b> — ${used:.0f} of ${cap:.0f} at risk · {slots_used} of
         {slots_max} position slots filled.
-        {'This week you can approve AT MOST ' + str(max_approvals) + ' ticket(s) (~$' + format(per_trade, '.0f') + ' risk each). Approving more breaks the playbook cap.'
-         if n_live > 0 else 'Nothing new to approve this week.'}
+        {'You can approve AT MOST ' + str(max_approvals) + ' ticket(s) (~$' + format(per_trade, '.0f') + ' risk each) without breaking the cap.'
+         if n_live > 0 else 'Nothing new to approve.'}
+        <div style="font-size:11px;color:#6e7781;margin-top:4px;">{equity_line}</div>
       </div>"""
 
     return f"""

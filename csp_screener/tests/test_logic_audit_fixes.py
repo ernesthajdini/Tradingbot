@@ -117,7 +117,11 @@ def test_generator_skips_expiry_whose_hold_spans_earnings():
 # BUG 4 — the live tier's missing open-interest floor
 # ---------------------------------------------------------------------------
 
-def test_live_spread_requires_open_interest():
+def test_live_spread_requires_open_interest(monkeypatch):
+    # $2-wide spreads only fit once equity reaches the balance the
+    # $130 cap assumes ($2.6K). This test is about the other gates.
+    from csp_screener import account
+    monkeypatch.setattr(account, "CURRENT_EQUITY", 2600.0)
     thin = OptionsChain(
         ticker="X", spot=26.0, expirations=[EXP], source="yfinance",
         puts=[_put(24.0, 0.95, -0.28, oi=30), _put(22.0, 0.20, -0.12, oi=17)])
@@ -131,12 +135,69 @@ def test_live_spread_requires_open_interest():
     assert generate_spread_setup("X", 26.0, liquid) is not None
 
 
-def test_live_spread_degrades_when_no_oi_data_at_all():
+def test_live_spread_degrades_when_no_oi_data_at_all(monkeypatch):
+    # $2-wide spreads only fit once equity reaches the balance the
+    # $130 cap assumes ($2.6K). This test is about the other gates.
+    from csp_screener import account
+    monkeypatch.setattr(account, "CURRENT_EQUITY", 2600.0)
     # A snapshot with zero OI everywhere is UNKNOWN, not "all illiquid"
     chain = OptionsChain(
         ticker="X", spot=26.0, expirations=[EXP], source="yfinance",
         puts=[_put(24.0, 0.95, -0.28, oi=0), _put(22.0, 0.20, -0.12, oi=0)])
     assert generate_spread_setup("X", 26.0, chain) is not None
+
+
+# ---------------------------------------------------------------------------
+# Account model — $200/mo is the DEPOSIT, not the risk budget
+# ---------------------------------------------------------------------------
+
+def test_risk_caps_scale_to_real_equity_and_never_exceed_config():
+    from csp_screener import account
+    r = account.risk_summary()
+    # config's $130 was sized for the projected $2.6K Jan-2027 balance; on
+    # today's equity the playbook's 5% rule must bind tighter.
+    assert r["max_risk_per_trade"] <= config.MAX_RISK_PER_SPREAD
+    assert r["max_total_risk"] <= config.MAX_TOTAL_PREMIUM_AT_RISK
+    assert r["per_trade_pct_of_equity"] == pytest.approx(0.05, abs=1e-9)
+    assert r["total_pct_of_equity"] == pytest.approx(0.08, abs=1e-9)
+    # The deposit is not the budget
+    assert account.MONTHLY_DEPOSIT != r["max_total_risk"]
+
+
+def test_caps_rise_with_equity_but_stop_at_the_config_ceiling(monkeypatch):
+    from csp_screener import account
+    monkeypatch.setattr(account, "CURRENT_EQUITY", 2600.0)
+    assert account.max_risk_per_trade() == pytest.approx(130.0)  # 5% of 2.6K
+    monkeypatch.setattr(account, "CURRENT_EQUITY", 10_000.0)
+    # Never looser than the absolute ceiling, however big the account gets
+    assert account.max_risk_per_trade() == config.MAX_RISK_PER_SPREAD
+    assert account.max_total_risk() == config.MAX_TOTAL_PREMIUM_AT_RISK
+
+
+def test_live_tier_portfolio_caps_are_enforced(monkeypatch):
+    from csp_screener import account
+    from csp_screener.main import step_open_virtual_positions
+    from csp_screener.setup_generator import VirtualSetup
+
+    def live_setup(ticker, strike, risk):
+        return VirtualSetup(
+            ticker=ticker, spot_at_screen=strike * 1.1,
+            expiration=EXP.date().isoformat(), dte=35, strike=strike,
+            pct_otm=0.09, delta=-0.28, iv=0.6,
+            bid=0.74, ask=0.76, mid=0.75, bid_ask_pct=0.02,
+            open_interest=3000, volume=400,
+            estimated_credit_per_contract=75.0,
+            max_loss_per_contract=risk, breakeven=strike - 0.75,
+            data_quality="ibkr_greeks", reasoning=[],
+            structure="put_credit_spread", long_strike=strike - 2, tier="live",
+        )
+
+    monkeypatch.setattr(account, "CURRENT_EQUITY", 1200.0)  # budget = $96
+    cands = [{"ticker": "AAA", "setup": live_setup("AAA", 24.0, 60.0).to_dict()},
+             {"ticker": "BBB", "setup": live_setup("BBB", 30.0, 60.0).to_dict()}]
+    opened = step_open_virtual_positions(cands, "screen_caps")
+    # $60 fits; a second $60 would take open risk to $120 > the $96 budget
+    assert len(opened) == 1
 
 
 # ---------------------------------------------------------------------------

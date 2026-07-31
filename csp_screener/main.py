@@ -27,6 +27,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from csp_screener import (
+    account,
     config,
     data_pipeline,
     deadman,
@@ -295,6 +296,14 @@ def step_open_virtual_positions(
     cooldown_tickers = virtual_tracker.recently_closed_tickers(REOPEN_COOLDOWN_DAYS)
     open_count = len(already_open)
 
+    # Portfolio caps on the LIVE tier only. These were printed everywhere but
+    # enforced nowhere, so the paper book could hold a portfolio the playbook
+    # forbids — and "would this ACCOUNT have made money" became unanswerable.
+    # Sandbox stays unthrottled on purpose (playbook change #8 wants volume).
+    live_open = [t for t in open_trades if t.tier == "live"]
+    live_slots_used = len(live_open)
+    live_risk_used = sum(float(t.max_loss or 0) for t in live_open)
+
     opened = []
     for c in candidates:
         if not c.get("setup"):
@@ -326,6 +335,24 @@ def step_open_virtual_positions(
                 f"not opening further virtual positions this run"
             )
             break
+        if (setup_dict.get("tier") or "sandbox") == "live":
+            risk = float(setup_dict.get("max_loss_per_contract") or 0)
+            if live_slots_used >= config.MAX_OPEN_POSITIONS:
+                logger.info(
+                    f"Skipping live {setup_dict['ticker']}: "
+                    f"{live_slots_used}/{config.MAX_OPEN_POSITIONS} position "
+                    f"slots already used")
+                continue
+            if live_risk_used + risk > account.max_total_risk():
+                logger.info(
+                    f"Skipping live {setup_dict['ticker']}: ${risk:.0f} risk "
+                    f"would take open risk to ${live_risk_used + risk:.0f} > "
+                    f"${account.max_total_risk():.0f} budget "
+                    f"({account.MAX_TOTAL_RISK_PCT:.0%} of "
+                    f"${account.current_equity():,.0f})")
+                continue
+            live_slots_used += 1
+            live_risk_used += risk
         setup = VirtualSetup(**setup_dict)
         trade_id = virtual_tracker.open_virtual_position(
             setup, screen_id,
@@ -617,10 +644,12 @@ def run_weekly_screen(
                 "live_risk_open": sum(
                     float(p.get("max_loss") or 0)
                     for p in open_positions if p.get("tier") == "live"),
-                "budget_cap": config.MAX_TOTAL_PREMIUM_AT_RISK,
+                "budget_cap": account.max_total_risk(),
+                "equity": account.current_equity(),
+                "monthly_deposit": account.MONTHLY_DEPOSIT,
                 "slots_used": sum(1 for p in open_positions if p.get("tier") == "live"),
                 "slots_max": config.MAX_OPEN_POSITIONS,
-                "max_risk_per_spread": config.MAX_RISK_PER_SPREAD,
+                "max_risk_per_spread": account.max_risk_per_trade(),
                 "live_viable_count": len(newly_staged_live),
                 "no_trade_week": False,
                 "opened_count": len(opened),
@@ -657,10 +686,12 @@ def run_weekly_screen(
                 "open_positions_count": len(open_positions),
                 "live_viable_count": len(live_viable),
                 "live_risk_open": sum(float(p.get("max_loss") or 0) for p in live_open),
-                "budget_cap": config.MAX_TOTAL_PREMIUM_AT_RISK,
+                "budget_cap": account.max_total_risk(),
+                "equity": account.current_equity(),
+                "monthly_deposit": account.MONTHLY_DEPOSIT,
                 "slots_used": len(live_open),
                 "slots_max": config.MAX_OPEN_POSITIONS,
-                "max_risk_per_spread": config.MAX_RISK_PER_SPREAD,
+                "max_risk_per_spread": account.max_risk_per_trade(),
                 "market_open": us_market_likely_open(),
             }
             subject, html = notify.render_full_email(
