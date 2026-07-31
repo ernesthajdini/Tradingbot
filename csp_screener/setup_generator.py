@@ -93,6 +93,13 @@ class VirtualSetup:
     net_credit_after_friction: Optional[float] = None
     friction_estimate: Optional[float] = None
     ticket: Optional[str] = None          # staged order text (live tier)
+    # SIZING annotation — never a filter. The signal stands on its own; this
+    # only says how much of it today's account can carry.
+    affordable_contracts: Optional[int] = None
+    fits_account: Optional[bool] = None
+    pct_of_equity: Optional[float] = None
+    sizing_note: Optional[str] = None
+    net_at_designed_exit: Optional[float] = None  # what the 50% TP delivers
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -280,6 +287,9 @@ def generate_setup(
         f"({chosen_contract.bid_ask_spread_pct:.1%} spread)"
     )
 
+    from csp_screener import account as _account
+    _afford = _account.assess_affordability(max_loss_per_contract)
+
     return VirtualSetup(
         ticker=ticker,
         spot_at_screen=round(spot, 2),
@@ -302,6 +312,11 @@ def generate_setup(
         reasoning=reasoning,
         structure="csp",
         tier="sandbox",
+        affordable_contracts=_afford["affordable_contracts"],
+        fits_account=_afford["fits_account"],
+        pct_of_equity=round(_afford["pct_of_equity"], 4),
+        sizing_note=_afford["note"],
+        net_at_designed_exit=round(net_at_best_exit, 2),
     )
 
 
@@ -446,17 +461,14 @@ def generate_spread_setup(
                 continue
             cr = ncs * 100.0
             ml = w * 100.0 - cr
-            # Equity-scaled cap: config's $130 was sized for the projected
-            # $2.6K January-2027 balance. On today's equity the playbook's
-            # 5% rule binds tighter, and percentages are the playbook's
-            # stated invariant.
-            from csp_screener import account
-            risk_cap = account.max_risk_per_trade()
-            if ml > risk_cap:
+            # STRUCTURAL ceiling only (the strategy's defined-risk design).
+            # Deliberately NOT the account's equity-scaled cap: signal
+            # quality and position sizing are separate jobs. A good spread
+            # must not disappear because this month's balance is small —
+            # it gets found, tracked, and annotated with what's affordable.
+            if ml > config.MAX_RISK_PER_SPREAD:
                 _diag(f"{exp.date()}: ${w:g}-wide risks ${ml:.0f} > "
-                      f"${risk_cap:.0f} cap "
-                      f"({account.MAX_RISK_PCT_PER_TRADE:.0%} of "
-                      f"${account.current_equity():,.0f} equity)")
+                      f"${config.MAX_RISK_PER_SPREAD:.0f} structural ceiling")
                 continue
             # Friction: 2 legs open + 2 legs close = 4 contracts of commission,
             # plus slippage on the credit both ways.
@@ -518,6 +530,10 @@ def generate_spread_setup(
             f"plan does not do)"
         )
 
+        # Sizing annotation (never a gate — see account.assess_affordability)
+        from csp_screener import account
+        afford = account.assess_affordability(max_loss)
+
         quality = ("ibkr_greeks" if (short_leg.source == "ibkr" and short_leg.delta is not None)
                    else "yfinance_iv_estimated_delta" if short_leg.iv is not None
                    else "premium_only_no_greeks")
@@ -553,6 +569,11 @@ def generate_spread_setup(
             net_credit_after_friction=round(net_after_friction, 2),
             friction_estimate=round(friction, 2),
             ticket=ticket,
+            affordable_contracts=afford["affordable_contracts"],
+            fits_account=afford["fits_account"],
+            pct_of_equity=round(afford["pct_of_equity"], 4),
+            sizing_note=afford["note"],
+            net_at_designed_exit=round(net_at_designed_exit, 2),
         )
 
     return None

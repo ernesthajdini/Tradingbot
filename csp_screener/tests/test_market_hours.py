@@ -99,7 +99,7 @@ def test_near_miss_ledger_reports_risk_cap(monkeypatch):
     diags: list = []
     setup = generate_spread_setup("DKNG", 25.0, chain, diagnostics=diags)
     assert setup is None
-    assert any("cap" in d and "$145" in d for d in diags)
+    assert any("structural ceiling" in d and "$145" in d for d in diags)
 
 
 def test_live_path_delta_cap_rejects_near_money_short_leg():

@@ -153,6 +153,18 @@ def _plain_action_html(
             "no Greeks. Don't act on this one without checking the chain in IBKR.<br>"
         )
 
+    # SIZING — an annotation, never a reason the signal was hidden. A valid
+    # signal that today's account can't carry is still worth knowing about;
+    # it just gets tracked instead of taken.
+    sizing_html = ""
+    note = setup.get("sizing_note")
+    if note and tier == "live":
+        fits = setup.get("fits_account")
+        colour = "#57606a" if fits else "#bf8700"
+        label = "Your size:" if fits else "Too big for now:"
+        sizing_html = (f"<span style='color:{colour};'><b>{label}</b> "
+                       f"{escape(str(note))}</span><br>")
+
     if is_paper:
         box_style = "background:#f6f8fa;border:1px solid #d0d7de;"
         title = "The paper trade — research only, not for your account"
@@ -196,6 +208,7 @@ def _plain_action_html(
         <b>You win</b> if {escape(ticker)} stays above <b>${strike:.2f}</b> through {pretty}
         — the strike is {setup['pct_otm']*100:.0f}% below today's ${last_price:.2f}.<br>
         {worst}<br>
+        {sizing_html}
         <span style="color:#57606a;">Exit plan: buy back at 50% of the credit,
         or close when 21 days remain — whichever comes first.</span>{paper_note}
       </div>

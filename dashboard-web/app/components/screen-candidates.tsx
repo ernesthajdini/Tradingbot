@@ -119,6 +119,14 @@ function TradeInPlainEnglish({
               : ` if ${s.ticker} went to zero. You start losing below $${s.breakeven.toFixed(2)}.`}
           </span>
         </li>
+        {!isPaper && s.sizing_note && (
+          <li className={s.fits_account ? 'text-muted' : 'text-warning'}>
+            <span className="font-medium">
+              {s.fits_account ? 'Your size: ' : 'Too big for now: '}
+            </span>
+            {s.sizing_note}
+          </li>
+        )}
         <li className="text-muted">
           Exit plan: buy it back at 50% of the credit, or close when 21 days remain — whichever first.
         </li>

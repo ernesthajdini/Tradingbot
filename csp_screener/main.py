@@ -335,28 +335,33 @@ def step_open_virtual_positions(
                 f"not opening further virtual positions this run"
             )
             break
-        if (setup_dict.get("tier") or "sandbox") == "live":
-            risk = float(setup_dict.get("max_loss_per_contract") or 0)
-            if live_slots_used >= config.MAX_OPEN_POSITIONS:
+        # SIZING IS NOT A SIGNAL FILTER. Every valid signal is tracked so the
+        # evidence base measures whether the STRATEGY works — that is what the
+        # January gate needs, and it must not be thinned by whatever this
+        # month's balance happens to be. What the account could actually have
+        # carried is recorded alongside (portfolio_fit), so the account-level
+        # scoreboard stays answerable too.
+        risk = float(setup_dict.get("max_loss_per_contract") or 0)
+        is_live = (setup_dict.get("tier") or "sandbox") == "live"
+        portfolio_fit = True
+        if is_live:
+            if (live_slots_used >= config.MAX_OPEN_POSITIONS
+                    or live_risk_used + risk > account.max_total_risk()):
+                portfolio_fit = False
                 logger.info(
-                    f"Skipping live {setup_dict['ticker']}: "
-                    f"{live_slots_used}/{config.MAX_OPEN_POSITIONS} position "
-                    f"slots already used")
-                continue
-            if live_risk_used + risk > account.max_total_risk():
-                logger.info(
-                    f"Skipping live {setup_dict['ticker']}: ${risk:.0f} risk "
-                    f"would take open risk to ${live_risk_used + risk:.0f} > "
-                    f"${account.max_total_risk():.0f} budget "
-                    f"({account.MAX_TOTAL_RISK_PCT:.0%} of "
-                    f"${account.current_equity():,.0f})")
-                continue
-            live_slots_used += 1
-            live_risk_used += risk
+                    f"{setup_dict['ticker']}: tracked as a signal, but the "
+                    f"account could not have carried it "
+                    f"(slots {live_slots_used}/{config.MAX_OPEN_POSITIONS}, "
+                    f"open risk ${live_risk_used:.0f} + ${risk:.0f} vs "
+                    f"${account.max_total_risk():.0f} budget)")
+            else:
+                live_slots_used += 1
+                live_risk_used += risk
         setup = VirtualSetup(**setup_dict)
         trade_id = virtual_tracker.open_virtual_position(
             setup, screen_id,
             rv_percentile=c.get("rv_percentile"), vix=vix,
+            portfolio_fit=portfolio_fit,
         )
         opened.append(trade_id)
         already_open.add(key)

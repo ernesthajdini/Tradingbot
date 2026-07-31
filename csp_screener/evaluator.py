@@ -132,6 +132,7 @@ def compute_summary(
     period_days: Optional[int] = None,
     period_label: str = "",
     tier: Optional[str] = None,
+    portfolio_fit_only: bool = False,
 ) -> PerformanceSummary:
     """
     Summary metrics for closed virtual trades in the given period.
@@ -150,6 +151,12 @@ def compute_summary(
     # The playbook also requires the two to qualify separately (changes #5/#8).
     if tier:
         all_closed = [t for t in all_closed if (t.get("tier") or "sandbox") == tier]
+    # SIGNAL scoreboard (default) = every valid signal, which is what proves
+    # the strategy. ACCOUNT scoreboard = only trades the caps allowed, which
+    # is what your balance would actually have done. Legacy rows have no
+    # portfolio_fit flag and are treated as fitting.
+    if portfolio_fit_only:
+        all_closed = [t for t in all_closed if t.get("portfolio_fit", True)]
     closed = _filter_by_period(all_closed, period_days)
     closed_ids = {c["trade_id"] for c in all_closed}
     # Same sanity gate as the closed-trade join — otherwise quarantined
@@ -238,4 +245,7 @@ def all_periods_summary() -> dict[str, PerformanceSummary]:
         # distributions, so the tier splits are the honest scoreboards.
         "live": compute_summary(None, "all-time (live tier)", tier="live"),
         "sandbox": compute_summary(None, "all-time (sandbox)", tier="sandbox"),
+        # Signal quality vs what the account could actually carry.
+        "account": compute_summary(
+            None, "all-time (account-sized)", portfolio_fit_only=True),
     }

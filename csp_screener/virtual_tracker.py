@@ -50,6 +50,7 @@ def open_virtual_position(
     screen_id: str,
     rv_percentile: float | None = None,
     vix: float | None = None,
+    portfolio_fit: bool | None = None,
 ) -> str:
     """
     Log an OPEN event. Returns the virtual trade_id.
@@ -86,6 +87,13 @@ def open_virtual_position(
         record["rv_percentile_at_open"] = round(float(rv_percentile), 2)
     if vix is not None:
         record["vix_at_open"] = round(float(vix), 2)
+    if portfolio_fit is not None:
+        # Could the ACCOUNT have carried this at the time? Signal quality is
+        # measured over every trade; account performance over the subset the
+        # caps allowed. Two questions, two scoreboards, one journal.
+        record["portfolio_fit"] = bool(portfolio_fit)
+    if setup.affordable_contracts is not None:
+        record["affordable_contracts_at_open"] = int(setup.affordable_contracts)
     journal.append("virtual_trades", record)
     logger.info(f"Virtual position opened [{record['tier']}/{record['structure']}]: {trade_id}")
     return trade_id

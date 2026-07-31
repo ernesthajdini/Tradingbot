@@ -61,6 +61,42 @@ def max_total_risk() -> float:
                MAX_TOTAL_RISK_PCT * current_equity())
 
 
+def assess_affordability(max_loss_per_contract: float) -> dict:
+    """
+    SIZING, not signal. Never call this to decide whether a setup exists —
+    only to say how much of it this account can take today.
+
+    The screener's job is to find the best structure on its merits; how many
+    contracts (if any) you put on is a separate, later decision that moves
+    with equity. Conflating the two hides good signals during small-account
+    months and destroys the evidence they would have produced.
+    """
+    eq = current_equity()
+    cap = max_risk_per_trade()
+    total = max_total_risk()
+    risk = float(max_loss_per_contract or 0)
+    contracts = int(min(cap, total) // risk) if risk > 0 else 0
+    pct = risk / eq if eq else 0.0
+    if contracts >= 1:
+        note = (f"Fits today: {contracts}x at ${risk:.0f} risk each "
+                f"({pct:.1%} of the ${eq:,.0f} account per contract).")
+    else:
+        needed = risk / MAX_RISK_PCT_PER_TRADE
+        note = (f"Signal is valid but too big for today's account: ${risk:.0f} "
+                f"is {pct:.1%} of ${eq:,.0f} (cap {MAX_RISK_PCT_PER_TRADE:.0%} "
+                f"= ${cap:.0f}). Needs ~${needed:,.0f} equity — roughly "
+                f"{max(0, int((needed - eq) // MONTHLY_DEPOSIT) + 1)} more "
+                f"monthly deposits. Track it; don't take it.")
+    return {
+        "risk_per_contract": risk,
+        "affordable_contracts": contracts,
+        "fits_account": contracts >= 1,
+        "pct_of_equity": pct,
+        "equity_needed": (risk / MAX_RISK_PCT_PER_TRADE) if risk > 0 else 0.0,
+        "note": note,
+    }
+
+
 def risk_summary() -> dict:
     """Everything a display needs, so no surface invents its own numbers."""
     eq = current_equity()

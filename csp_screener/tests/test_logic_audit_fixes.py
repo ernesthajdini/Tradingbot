@@ -174,7 +174,7 @@ def test_caps_rise_with_equity_but_stop_at_the_config_ceiling(monkeypatch):
     assert account.max_total_risk() == config.MAX_TOTAL_PREMIUM_AT_RISK
 
 
-def test_live_tier_portfolio_caps_are_enforced(monkeypatch):
+def test_signals_tracked_regardless_of_size_but_flagged(monkeypatch):
     from csp_screener import account
     from csp_screener.main import step_open_virtual_positions
     from csp_screener.setup_generator import VirtualSetup
@@ -196,8 +196,17 @@ def test_live_tier_portfolio_caps_are_enforced(monkeypatch):
     cands = [{"ticker": "AAA", "setup": live_setup("AAA", 24.0, 60.0).to_dict()},
              {"ticker": "BBB", "setup": live_setup("BBB", 30.0, 60.0).to_dict()}]
     opened = step_open_virtual_positions(cands, "screen_caps")
-    # $60 fits; a second $60 would take open risk to $120 > the $96 budget
-    assert len(opened) == 1
+    # BOTH signals are tracked — sizing must never suppress evidence. The
+    # second is flagged as one the account could NOT have carried ($60 + $60
+    # = $120 > the $96 budget), so the account scoreboard stays honest while
+    # the signal scoreboard keeps its sample.
+    assert len(opened) == 2
+    opens = journal.read_filtered("virtual_trades", event="open")
+    fits = {o["ticker"]: o.get("portfolio_fit") for o in opens}
+    assert fits["AAA"] is True
+    assert fits["BBB"] is False
+    # And the two scoreboards diverge accordingly
+    assert evaluator.compute_summary().open_count == 2
 
 
 # ---------------------------------------------------------------------------

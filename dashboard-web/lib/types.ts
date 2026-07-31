@@ -73,6 +73,12 @@ export interface VirtualSetup {
   net_credit_after_friction?: number | null;
   friction_estimate?: number | null;
   ticket?: string | null;
+  // Sizing annotation — never a filter on the signal itself.
+  affordable_contracts?: number | null;
+  fits_account?: boolean | null;
+  pct_of_equity?: number | null;
+  sizing_note?: string | null;
+  net_at_designed_exit?: number | null;
 }
 
 export interface OpenVirtualTrade {
