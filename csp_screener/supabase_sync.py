@@ -210,6 +210,74 @@ def push_virtual_trade(record: dict) -> bool:
         return False
 
 
+def push_shadow_trade(record: dict) -> bool:
+    """
+    Push a shadow_trades event (open or close) to Supabase — SEPARATE table
+    from virtual_trades so the go-live gate's pooled queries can never see
+    counterfactual trades. Idempotent on (event, trade_id). Fails soft when
+    the table hasn't been created yet (supabase/shadow_schema.sql).
+    """
+    client = _get_client()
+    if client is None:
+        return False
+    try:
+        row = {
+            "event": record.get("event"),
+            "trade_id": record.get("trade_id"),
+            "screen_id": record.get("screen_id"),
+            "ticker": record.get("ticker"),
+            "strike": record.get("strike"),
+            "expiration": record.get("expiration"),
+            "opened_at": record.get("opened_at"),
+            "spot_at_open": record.get("spot_at_open"),
+            "dte_at_open": record.get("dte_at_open"),
+            "credit_received": record.get("credit_received"),
+            "max_loss": record.get("max_loss"),
+            "breakeven": record.get("breakeven"),
+            "delta_at_open": record.get("delta_at_open"),
+            "iv_at_open": record.get("iv_at_open"),
+            "data_quality": record.get("data_quality"),
+            "rv_percentile_at_open": record.get("rv_percentile_at_open"),
+            "vix_at_open": record.get("vix_at_open"),
+            "closed_at": record.get("closed_at"),
+            "exit_reason": record.get("exit_reason"),
+            "exit_spot": record.get("exit_spot"),
+            "final_put_price": record.get("final_put_price"),
+            "pnl": record.get("pnl"),
+            "pnl_gross": record.get("pnl_gross"),
+            "friction": record.get("friction"),
+            "pnl_pessimistic": record.get("pnl_pessimistic"),
+            "eur_usd_rate": record.get("eur_usd_rate"),
+            "pnl_eur": record.get("pnl_eur"),
+            "structure": record.get("structure"),
+            "tier": record.get("tier"),
+            "long_strike": record.get("long_strike"),
+            "pnl_pct_of_credit": record.get("pnl_pct_of_credit"),
+            "notes": record.get("notes"),
+            "shadow_reason": record.get("shadow_reason"),
+            "rank_at_open": record.get("rank_at_open"),
+            "next_earnings_days_at_open": record.get("next_earnings_days_at_open"),
+            "record_hash": record.get("record_hash"),
+            "recorded_at": record.get("recorded_at"),
+        }
+        row = _json_safe(row)
+        row = {k: v for k, v in row.items() if v is not None}
+        client.table("shadow_trades").upsert(
+            row, on_conflict="event,trade_id"
+        ).execute()
+        return True
+    except Exception as e:
+        # PGRST205 = table not in schema cache (not created yet). The local
+        # JSONL journal still has the record; nothing is lost locally, but
+        # on stateless CI runners cloud persistence is the real store.
+        logger.warning(
+            f"Supabase push_shadow_trade failed: {e}"
+            + (" — run supabase/shadow_schema.sql in the SQL Editor"
+               if "PGRST205" in str(e) or "shadow_trades" in str(e) else "")
+        )
+        return False
+
+
 def push_system_event(record: dict) -> bool:
     client = _get_client()
     if client is None:
@@ -238,6 +306,8 @@ def push(topic: str, record: dict) -> bool:
         return push_screen(record)
     if topic == "virtual_trades":
         return push_virtual_trade(record)
+    if topic == "shadow_trades":
+        return push_shadow_trade(record)
     if topic == "system_events":
         return push_system_event(record)
     if topic == "evaluations":
@@ -368,6 +438,73 @@ def hydrate_virtual_trades() -> dict:
         return {"hydrated": False, "reason": str(e)}
 
 
+def hydrate_shadow_trades() -> dict:
+    """
+    Merge cloud shadow_trades into the local shadow journal — same stateless-
+    runner problem as hydrate_virtual_trades, same union-by-(event, trade_id)
+    semantics, separate table and topic. No-op (soft) when the shadow_trades
+    table doesn't exist yet.
+    """
+    client = _get_client()
+    if client is None:
+        return {"hydrated": False, "reason": "supabase not configured"}
+
+    import json as _json
+    from csp_screener import journal
+
+    try:
+        local = journal.read_all("shadow_trades")
+        local_keys = {(r.get("event"), r.get("trade_id")) for r in local}
+
+        rows: list[dict] = []
+        page_size = 1000
+        offset = 0
+        while True:
+            res = (
+                client.table("shadow_trades")
+                .select("*")
+                .order("id")
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            batch = res.data or []
+            rows.extend(batch)
+            if len(batch) < page_size:
+                break
+            offset += page_size
+
+        added = 0
+        path = journal.JOURNAL_FILES["shadow_trades"]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            for row in rows:
+                key = (row.get("event"), row.get("trade_id"))
+                if key in local_keys:
+                    continue
+                rec = _row_to_journal_record(row)
+                # Shadow-only fields the shared converter doesn't know about
+                if row.get("shadow_reason") is not None:
+                    rec["shadow_reason"] = row["shadow_reason"]
+                for int_col in ("rank_at_open", "next_earnings_days_at_open"):
+                    if row.get(int_col) is not None:
+                        try:
+                            rec[int_col] = int(row[int_col])
+                        except (ValueError, TypeError):
+                            pass
+                if not rec.get("event") or not rec.get("trade_id"):
+                    continue
+                f.write(_json.dumps(rec, separators=(",", ":")) + "\n")
+                local_keys.add(key)
+                added += 1
+
+        if added:
+            logger.info(f"Hydrated {added} shadow_trades records from Supabase")
+        return {"hydrated": True, "added": added, "cloud_rows": len(rows)}
+    except Exception as e:
+        logger.warning(f"Shadow hydration from Supabase failed (soft): {e}")
+        return {"hydrated": False, "reason": str(e)}
+
+
 def fetch_screens_map(limit: int = 1000) -> dict:
     """
     {screen_id: row} for recent screens, from the CLOUD.
@@ -456,7 +593,8 @@ def backfill_all_topics() -> dict:
     Use this when you first set up Supabase and want to migrate local history.
     """
     from csp_screener import journal
-    summary = {"screens": 0, "virtual_trades": 0, "system_events": 0}
+    summary = {"screens": 0, "virtual_trades": 0, "shadow_trades": 0,
+               "system_events": 0}
     for topic in summary.keys():
         records = journal.read_all(topic)
         ok = 0

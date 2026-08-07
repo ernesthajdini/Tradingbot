@@ -96,6 +96,15 @@ def step_mark_virtual_to_market(price_data: dict, eur_usd_rate=None) -> dict:
         f"Virtual mark-to-market: {summary['updated']} updated, "
         f"{summary['closed']} closed (PnL ${summary['closed_pnl_total']:+.2f})"
     )
+    # Shadow book marks AFTER production (the production pass warms the
+    # per-run quote cache the shadows free-ride on). Never breaks a run.
+    try:
+        from csp_screener import shadow_book
+        summary["shadow"] = shadow_book.mark_open_shadows(
+            spot_resolver, iv_resolver, eur_usd_rate=eur_usd_rate,
+            market_open=us_market_likely_open())
+    except Exception as e:
+        logger.warning(f"Shadow marking skipped (non-fatal): {e}")
     return summary
 
 
@@ -146,16 +155,36 @@ def step_filter_and_rank(
     contexts: list[TickerContext],
     now: datetime,
     vix: float | None = None,
+    shadow_pool: list | None = None,
+    earnings_rejects: list | None = None,
 ) -> list[dict]:
-    """Apply filters, then rank passing candidates (with learning-layer weights)."""
+    """
+    Apply filters, then rank passing candidates (with learning-layer weights).
+
+    shadow_pool / earnings_rejects: optional out-params (the near-miss-ledger
+    idiom). When given, shadow_pool receives every filter-passer ranked BELOW
+    the returned top-N (with its full-ranking position), and earnings_rejects
+    receives tickers whose ONLY failing filter was the earnings blackout —
+    the two cohorts the shadow book tracks. Passing neither changes nothing.
+    """
     passing = []
     for ctx in contexts:
         result = filters.apply_all_filters(ctx, now=now)
-        if not result.passed:
-            continue
         next_earn_days = None
         if ctx.next_earnings is not None:
             next_earn_days = (ctx.next_earnings - now).days
+        if not result.passed:
+            # Earnings runs LAST in ALL_FILTERS, so an earnings rejection
+            # means every other filter passed — exactly the autopsy cohort.
+            if (earnings_rejects is not None
+                    and result.reason.startswith("earnings in")):
+                earnings_rejects.append({
+                    "ticker": ctx.ticker,
+                    "last_price": ctx.last_price,
+                    "avg_volume_20d": ctx.avg_volume_20d,
+                    "next_earnings_days": next_earn_days,
+                })
+            continue
         passing.append({
             "ticker": ctx.ticker,
             "last_price": ctx.last_price,
@@ -186,6 +215,30 @@ def step_filter_and_rank(
         current_vix=vix,
     )
     logger.info(f"Ranker: top {len(ranked)} candidates selected (learning-aware)")
+
+    # Shadow pool: the SAME ranking over the full field, so every discard
+    # carries its true position. Re-ranking is milliseconds (pure pandas on
+    # already-loaded history) and leaves the production top-N untouched.
+    if shadow_pool is not None and passing:
+        try:
+            full = ranker.rank_candidates(
+                passing, top_n=len(passing),
+                ticker_scores=ticker_scores, current_vix=vix)
+            top_tickers = {r.ticker for r in ranked}
+            for pos, cand in enumerate(full, start=1):
+                if cand.ticker in top_tickers:
+                    continue
+                shadow_pool.append({
+                    "ticker": cand.ticker,
+                    "last_price": cand.last_price,
+                    "rank_full": pos,
+                    "rv_percentile": cand.rv_percentile,
+                    "rv_20d_annual": cand.rv_20d_annual,
+                    "avg_volume_20d": cand.avg_volume_20d,
+                    "next_earnings_days": cand.next_earnings_days,
+                })
+        except Exception as e:
+            logger.warning(f"Shadow pool collection skipped (non-fatal): {e}")
     return ranked
 
 
@@ -479,6 +532,9 @@ def run_weekly_screen(
             hyd = supabase_sync.hydrate_virtual_trades()
             if hyd.get("added"):
                 logger.info(f"Hydration: pulled {hyd['added']} records from Supabase")
+            shyd = supabase_sync.hydrate_shadow_trades()
+            if shyd.get("added"):
+                logger.info(f"Hydration: pulled {shyd['added']} shadow records")
         except Exception as e:
             logger.debug(f"Hydration skipped: {e}")
 
@@ -563,9 +619,18 @@ def run_weekly_screen(
         # 3. Build contexts, filter, rank — BOTH TIERS (learning-aware)
         ibkr_client = _try_connect_ibkr() if use_ibkr else None
 
+        # Shadow-book cohorts collected while ranking (out-param idiom):
+        # discards below the cutoff + earnings-only rejects, per tier.
+        live_shadow_pool: list = []
+        live_earnings_rejects: list = []
+        sandbox_shadow_pool: list = []
+        sandbox_earnings_rejects: list = []
+
         # LIVE tier: $20-60 liquid names -> put credit spreads + tickets
         live_contexts = step_build_contexts(price_data, earnings_data, now, tier="live")
-        live_ranked = step_filter_and_rank(live_contexts, now, vix=vix)
+        live_ranked = step_filter_and_rank(
+            live_contexts, now, vix=vix,
+            shadow_pool=live_shadow_pool, earnings_rejects=live_earnings_rejects)
         live_candidates = step_generate_setups(live_ranked, ibkr_client=ibkr_client, tier="live")
         live_viable = [c for c in live_candidates if c.get("setup")]
         no_trade_week = len(live_viable) == 0
@@ -574,7 +639,9 @@ def run_weekly_screen(
 
         # SANDBOX tier: original $5-25 CSP research track (unchanged signals)
         sandbox_contexts = step_build_contexts(price_data, earnings_data, now, tier="sandbox")
-        sandbox_ranked = step_filter_and_rank(sandbox_contexts, now, vix=vix)
+        sandbox_ranked = step_filter_and_rank(
+            sandbox_contexts, now, vix=vix,
+            shadow_pool=sandbox_shadow_pool, earnings_rejects=sandbox_earnings_rejects)
         sandbox_candidates = step_generate_setups(sandbox_ranked, ibkr_client=ibkr_client, tier="sandbox")
 
         if ibkr_client is not None:
@@ -744,7 +811,46 @@ def run_weekly_screen(
             ] if recommendations else [],
         })
 
-        # 11. Deadman success ping
+        # 11. Shadow book: track this run's discards (SEPARATE journal —
+        # research rows the go-live gate can never see). Deliberately LAST:
+        # its chain fetches must never sit between a staged ticket and the
+        # 🎯 alert email, or between the run and its screens row (the CI
+        # verify gate) inside the job timeout. Never fatal.
+        try:
+            from csp_screener import shadow_book
+            for c in live_shadow_pool + live_earnings_rejects:
+                c["tier"] = "live"
+            for c in sandbox_shadow_pool + sandbox_earnings_rejects:
+                c["tier"] = "sandbox"
+            shadow_summary = shadow_book.record_run_shadows(
+                screen_id=screen_id,
+                discarded=live_shadow_pool + sandbox_shadow_pool,
+                earnings_blocked=live_earnings_rejects + sandbox_earnings_rejects,
+                production_open_tickers={
+                    t.ticker for t in virtual_tracker.get_open_virtual_trades()},
+                production_cooldown_tickers=virtual_tracker.recently_closed_tickers(
+                    REOPEN_COOLDOWN_DAYS),
+                vix=vix,
+            )
+            journal.append("system_events", {
+                "event": "shadow_run",
+                "at": datetime.now().isoformat(),
+                "screen_id": screen_id,
+                "opened": len(shadow_summary["opened"]),
+                "skipped": shadow_summary["skipped"],
+                "no_setup": shadow_summary["no_setup"],
+                "not_spanning": shadow_summary.get("not_spanning", 0),
+                "dropped_by_cap": shadow_summary.get("dropped_by_cap", 0),
+                "inert": shadow_summary.get("inert", False),
+                "marked": (mark_summary.get("shadow") or {}).get("updated", 0),
+                "closed": (mark_summary.get("shadow") or {}).get("closed", 0),
+                "closed_pnl": (mark_summary.get("shadow") or {}).get(
+                    "closed_pnl_total", 0.0),
+            })
+        except Exception as e:
+            logger.warning(f"Shadow book step skipped (non-fatal): {e}")
+
+        # 12. Deadman success ping
         ping_msg = (
             f"OK candidates={len(candidates)} opened={len(opened)} "
             f"closed={mark_summary['closed']} VIX={vix or 'na'}"

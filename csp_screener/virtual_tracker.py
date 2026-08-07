@@ -99,6 +99,36 @@ def open_virtual_position(
     return trade_id
 
 
+def close_economics(
+    credit_received: float,
+    final_put_price: float,
+    structure: str = "csp",
+) -> dict:
+    """
+    The one friction model, as a pure function. Gross PnL is the frictionless
+    mark; "pnl" is NET at BASE slippage everywhere downstream;
+    "pnl_pessimistic" is the wide-spread bound — paper fills contain no
+    slippage information, so honest reporting is a band, not a point.
+    Shared by the production close path, the shadow book and the backtest
+    engine so no surface can compute a different P&L for the same trade.
+    """
+    pnl_gross = credit_received - final_put_price
+    # Contracts crossing the tape round-trip: CSP = 2, spread = 4.
+    legs_round_trip = 4 if structure == "put_credit_spread" else 2
+    commissions = legs_round_trip * config.COMMISSION_PER_CONTRACT
+    slip_base = config.SLIPPAGE_PCT_OF_PREMIUM * (credit_received + final_put_price)
+    slip_pess = config.SLIPPAGE_PCT_PESSIMISTIC * (credit_received + final_put_price)
+    friction = commissions + slip_base
+    friction_pessimistic = commissions + slip_pess
+    return {
+        "pnl_gross": pnl_gross,
+        "friction": friction,
+        "friction_pessimistic": friction_pessimistic,
+        "pnl": pnl_gross - friction,
+        "pnl_pessimistic": pnl_gross - friction_pessimistic,
+    }
+
+
 def close_virtual_position(
     trade_id: str,
     exit_reason: str,
@@ -132,20 +162,11 @@ def close_virtual_position(
                     strike = None
             expiration = expiration or parts[3]
 
-    # Gross PnL is the frictionless mark. Net PnL subtracts realistic
-    # friction. "pnl" is NET at BASE slippage everywhere downstream;
-    # "pnl_pessimistic" is the wide-spread bound — paper fills contain no
-    # slippage information, so honest reporting is a band, not a point.
-    pnl_gross = credit_received - final_put_price
-    # Contracts crossing the tape round-trip: CSP = 2, spread = 4.
-    legs_round_trip = 4 if structure == "put_credit_spread" else 2
-    commissions = legs_round_trip * config.COMMISSION_PER_CONTRACT
-    slip_base = config.SLIPPAGE_PCT_OF_PREMIUM * (credit_received + final_put_price)
-    slip_pess = config.SLIPPAGE_PCT_PESSIMISTIC * (credit_received + final_put_price)
-    friction = commissions + slip_base
-    friction_pessimistic = commissions + slip_pess
-    pnl = pnl_gross - friction
-    pnl_pessimistic = pnl_gross - friction_pessimistic
+    econ = close_economics(credit_received, final_put_price, structure)
+    pnl_gross = econ["pnl_gross"]
+    friction = econ["friction"]
+    pnl = econ["pnl"]
+    pnl_pessimistic = econ["pnl_pessimistic"]
 
     pnl_eur = None
     if eur_usd_rate and eur_usd_rate > 0:

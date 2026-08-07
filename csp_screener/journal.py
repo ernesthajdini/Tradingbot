@@ -32,9 +32,13 @@ from csp_screener import config
 logger = logging.getLogger(__name__)
 
 # All journal files live here, organized by topic.
+# shadow_trades is a SEPARATE topic by design: golive.gate_status() and the
+# evaluator pool every close in virtual_trades, so counterfactual (shadow)
+# trades must live where the gate can never read them.
 JOURNAL_FILES = {
     "screens": config.JOURNAL_DIR / "screens.jsonl",
     "virtual_trades": config.JOURNAL_DIR / "virtual_trades.jsonl",
+    "shadow_trades": config.JOURNAL_DIR / "shadow_trades.jsonl",
     "evaluations": config.JOURNAL_DIR / "evaluations.jsonl",
     "system_events": config.JOURNAL_DIR / "system_events.jsonl",
 }

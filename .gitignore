@@ -41,3 +41,8 @@ Thumbs.db
 
 # stray analysis artifacts
 *.csv
+
+# Backtest data + results are research artifacts, never committed
+# (runs_log.jsonl IS committed — it is the multiplicity denominator)
+csp_screener/backtest/data/
+csp_screener/backtest/results/

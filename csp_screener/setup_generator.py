@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, asdict
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 from csp_screener import config
@@ -191,10 +191,15 @@ def generate_setup(
     chain: Optional[OptionsChain],
     target_delta: float = config.TARGET_DELTA,
     next_earnings_days: Optional[int] = None,
+    today: Optional[date] = None,
 ) -> Optional[VirtualSetup]:
     """
     Build a VirtualSetup for the given candidate. Returns None if no liquid
     contract is available in our DTE window.
+
+    today: injectable as-of date. Production callers omit it; the backtest
+    engine replays historical dates. Every DTE in the setup derives from
+    this date, never from the wall clock.
     """
     reasoning: list[str] = []
     if chain is None:
@@ -205,7 +210,7 @@ def generate_setup(
     if not chain.expirations:
         return None
 
-    today = datetime.now().date()
+    today = today or datetime.now().date()
     # Prefer mid-DTE expirations (35 ± 5)
     target_dte = (config.DTE_MIN + config.DTE_MAX) // 2
     expirations_sorted = sorted(
@@ -234,6 +239,7 @@ def generate_setup(
         reasoning.append("no liquid put found in DTE window")
         return None
 
+    chosen_dte = max(0, (chosen_exp.date() - today).days)
     credit_per_share = chosen_contract.mid
     credit_per_contract = credit_per_share * 100
     strike = chosen_contract.strike
@@ -278,7 +284,7 @@ def generate_setup(
 
     reasoning.append(
         f"Selected put at strike ${strike:.2f}, expiration {chosen_exp.date()}, "
-        f"DTE {chosen_contract.dte}, "
+        f"DTE {chosen_dte}, "
         f"{'delta ' + format(chosen_contract.delta, '+.3f') if chosen_contract.delta is not None else 'no delta'}"
     )
     reasoning.append(
@@ -294,7 +300,7 @@ def generate_setup(
         ticker=ticker,
         spot_at_screen=round(spot, 2),
         expiration=chosen_exp.date().isoformat(),
-        dte=chosen_contract.dte,
+        dte=chosen_dte,
         strike=strike,
         pct_otm=round((spot - strike) / spot, 4),
         delta=chosen_contract.delta,
@@ -331,6 +337,7 @@ def generate_spread_setup(
     target_delta: float = config.TARGET_DELTA,
     diagnostics: Optional[list] = None,
     next_earnings_days: Optional[int] = None,
+    today: Optional[date] = None,
 ) -> Optional[VirtualSetup]:
     """
     Build a PUT CREDIT SPREAD setup for a live-tier candidate:
@@ -358,7 +365,8 @@ def generate_spread_setup(
         _diag("no option chain data")
         return None
 
-    today = datetime.now().date()
+    replay = today is not None
+    today = today or datetime.now().date()
     target_dte = (config.DTE_MIN + config.DTE_MAX) // 2
     expirations_sorted = sorted(
         chain.expirations,
@@ -511,6 +519,7 @@ def generate_spread_setup(
             continue
 
         breakeven = short_leg.strike - net_credit_share
+        short_dte = max(0, (exp.date() - today).days)
         exp_str = exp.strftime("%d%b%y").upper()
         tp_price = round(net_credit_share * (1 - config.VIRTUAL_TP_PCT), 2)
         close_by = (exp.date() - timedelta(days=config.VIRTUAL_FORCE_EXIT_DTE)).isoformat()
@@ -525,8 +534,17 @@ def generate_spread_setup(
 
         # The go-live gate decides what this text CLAIMS to be. Before the
         # gate opens it is a research signal, never an order to place.
+        # Replay mode never reads the gate (it reads the live journal, which
+        # a backtest must not touch) — a replayed ticket is never approvable.
         from csp_screener import golive
-        gate = golive.gate_status()
+        if replay:
+            gate = {
+                "passed": False, "closed_trades": 0,
+                "required_trades": golive.MIN_CLOSED_PAPER_TRADES,
+                "earliest_date": golive.EARLIEST_LIVE_DATE.isoformat(),
+            }
+        else:
+            gate = golive.gate_status()
         if gate["passed"]:
             header = (f"SELL -1 {ticker} {exp_str} {short_leg.strike:g}P / "
                       f"BUY +1 {ticker} {exp_str} {long_leg.strike:g}P")
@@ -560,7 +578,7 @@ def generate_spread_setup(
             ticker=ticker,
             spot_at_screen=round(spot, 2),
             expiration=exp.date().isoformat(),
-            dte=short_leg.dte,
+            dte=short_dte,
             strike=short_leg.strike,
             pct_otm=round((spot - short_leg.strike) / spot, 4),
             delta=short_leg.delta,
@@ -577,7 +595,7 @@ def generate_spread_setup(
             data_quality=quality,
             reasoning=[
                 f"Put credit spread {short_leg.strike:g}/{long_leg.strike:g}, "
-                f"width ${width:g}, DTE {short_leg.dte}",
+                f"width ${width:g}, DTE {short_dte}",
                 f"Credit ${credit:.2f}, friction ~${friction:.2f}, "
                 f"net ${net_after_friction:.2f}, max risk ${max_loss:.0f}",
             ],

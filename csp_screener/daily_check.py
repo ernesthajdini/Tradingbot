@@ -56,18 +56,31 @@ def run() -> int:
             hyd = supabase_sync.hydrate_virtual_trades()
             if hyd.get("added"):
                 logger.info(f"Hydration: pulled {hyd['added']} records from Supabase")
+            shyd = supabase_sync.hydrate_shadow_trades()
+            if shyd.get("added"):
+                logger.info(f"Hydration: pulled {shyd['added']} shadow records")
         except Exception as e:
             logger.debug(f"Hydration skipped: {e}")
 
-        # Get list of unique tickers in open virtual positions
+        # Get list of unique tickers in open virtual positions — plus the
+        # shadow book's tickers, which mark on the same pass. A shadow-book
+        # failure must never stop production marking.
         open_trades = virtual_tracker.get_open_virtual_trades()
-        if not open_trades:
+        shadow_tickers: set = set()
+        try:
+            from csp_screener import shadow_book
+            shadow_tickers = {t.ticker for t in shadow_book.get_open_shadow_trades()}
+        except Exception as e:
+            logger.warning(f"Shadow book unavailable this run (non-fatal): {e}")
+        if not open_trades and not shadow_tickers:
             logger.info("No open virtual positions; nothing to do")
             deadman.ping_success("daily: no open positions")
             return 0
 
-        tickers = sorted({t.ticker for t in open_trades})
-        logger.info(f"Updating {len(open_trades)} positions across {len(tickers)} tickers")
+        tickers = sorted({t.ticker for t in open_trades} | shadow_tickers)
+        logger.info(f"Updating {len(open_trades)} positions "
+                    f"(+{len(shadow_tickers)} shadow tickers) across "
+                    f"{len(tickers)} tickers")
 
         # Fetch prices for those tickers
         price_data = data_pipeline.fetch_prices(tickers, lookback_days=60)
@@ -94,6 +107,17 @@ def run() -> int:
             f"{summary['closed']} closed (PnL ${summary['closed_pnl_total']:+.2f})"
         )
 
+        # Shadow book marks AFTER production — free-rides the warm quote
+        # cache, spends its own capped fetch budget, never fatal.
+        shadow_summary = None
+        try:
+            from csp_screener import shadow_book
+            shadow_summary = shadow_book.mark_open_shadows(
+                spot_resolver, iv_resolver, eur_usd_rate=eur_usd,
+                market_open=us_market_likely_open())
+        except Exception as e:
+            logger.warning(f"Shadow marking skipped (non-fatal): {e}")
+
         # Log the daily run
         journal.append("system_events", {
             "event": "daily_check",
@@ -103,6 +127,12 @@ def run() -> int:
             "closed": summary["closed"],
             "closed_pnl": summary["closed_pnl_total"],
             "details": summary["details"],
+            "shadow": ({
+                "updated": shadow_summary["updated"],
+                "closed": shadow_summary["closed"],
+                "closed_pnl": shadow_summary["closed_pnl_total"],
+                "quotes_spent": shadow_summary["quotes_spent"],
+            } if shadow_summary else None),
         })
 
         # If something closed today, send a brief notification
