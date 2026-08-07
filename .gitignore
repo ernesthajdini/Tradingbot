@@ -46,3 +46,4 @@ Thumbs.db
 # (runs_log.jsonl IS committed — it is the multiplicity denominator)
 csp_screener/backtest/data/
 csp_screener/backtest/results/
+csp_screener/backtest/tools/
