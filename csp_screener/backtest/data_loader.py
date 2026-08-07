@@ -20,10 +20,16 @@ strike) put:
 Adapters:
   * load_normalized_csv — the schema above, verbatim (write-your-own).
   * load_optionsdx_csv  — optionsDX free/paid flat files (wide C_/P_ format).
-  * ThetaData           — TO BE WRITTEN DURING THE FREE-TIER PILOT, against
-    the actual files on disk. Do not guess a vendor format; the pilot's
-    first job is to verify what the vendor actually serves (history depth,
-    delisted names) before any adapter or purchase.
+  * load_thetadata_dir  — the CSVs written by thetadata_pull.py (v3 EOD
+    format, verified against live pulls 2026-08-07). Notes: (a) the EOD
+    endpoint carries NO iv/delta — IV is BS-INVERTED from the two-sided
+    close mid using the production pricing model (self-consistent with how
+    marks are computed), delta estimated from that IV; (b) open interest is
+    VALUE-gated — on FREE-tier pulls OI=0 throughout, which the production
+    gates treat as OI-UNKNOWN (accept with warning; that is their designed
+    degradation); (c) prices are AS-TRADED, same basis as the strikes —
+    the stock_eod.csv per ticker is the aligned spot source, use
+    load_thetadata_stock for the prices dict, not yfinance.
 
 Survivorship metadata: every loader returns (frame, meta) where meta says
 whether the source includes delisted underlyings. The engine stamps this
@@ -44,6 +50,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -114,6 +121,135 @@ def load_optionsdx_csv(path, ticker: str) -> tuple[pd.DataFrame, dict]:
             "note": "optionsDX samples are per-ticker files of live names — "
                     "treat as survivorship-biased unless proven otherwise"}
     return out[NORMALIZED_COLUMNS], meta
+
+
+def _invert_bs_iv(mid: float, spot: float, strike: float, dte: int) -> Optional[float]:
+    """Implied vol by bisection on the production BS put pricer — the same
+    model the marks use, so replay pricing is self-consistent."""
+    from csp_screener.virtual_tracker import black_scholes_put_price
+    if mid <= 0 or spot <= 0 or strike <= 0 or dte <= 0:
+        return None
+    intrinsic = max(strike - spot, 0.0)
+    if mid <= intrinsic + 1e-6:
+        return None
+    lo, hi = 0.01, 3.0
+    if black_scholes_put_price(spot, strike, dte, hi) < mid:
+        return None  # priced beyond 300% IV — leave iv unset (hygiene cap)
+    for _ in range(40):
+        sigma = (lo + hi) / 2
+        if black_scholes_put_price(spot, strike, dte, sigma) < mid:
+            lo = sigma
+        else:
+            hi = sigma
+    return round((lo + hi) / 2, 4)
+
+
+def load_thetadata_dir(data_dir) -> tuple[pd.DataFrame, dict]:
+    """
+    Load every ticker directory written by thetadata_pull.py into one
+    normalized frame. Layout: data_dir/<TICKER>/puts_<EXP>.csv + stock_eod.csv.
+    v3 EOD columns: symbol,expiration,strike,right,created,last_trade,open,
+    high,low,close,volume,count,bid_size,bid_exchange,bid,bid_condition,
+    ask_size,ask_exchange,ask,ask_condition — quote_date derives from
+    `created` (the EOD snapshot timestamp), OI is absent on FREE pulls (0).
+    """
+    data_dir = Path(data_dir)
+    frames = []
+    for tdir in sorted(p for p in data_dir.iterdir() if p.is_dir()):
+        ticker = tdir.name
+        for f in sorted(tdir.glob("puts_*.csv")):
+            try:
+                df = pd.read_csv(f)
+            except Exception as e:
+                logger.warning(f"{f}: unreadable ({e})")
+                continue
+            if df.empty or "created" not in df.columns:
+                continue
+            exp = date.fromisoformat(f.stem.replace("puts_", ""))
+            out = pd.DataFrame({
+                "quote_date": pd.to_datetime(df["created"]).dt.date,
+                "ticker": ticker,
+                "expiration": exp,
+                "strike": pd.to_numeric(df["strike"], errors="coerce"),
+                "bid": pd.to_numeric(df["bid"], errors="coerce").fillna(0.0),
+                "ask": pd.to_numeric(df["ask"], errors="coerce").fillna(0.0),
+                "last": pd.to_numeric(df["close"], errors="coerce").fillna(0.0),
+                "volume": pd.to_numeric(df["volume"], errors="coerce")
+                    .fillna(0).astype(int),
+                "open_interest": (
+                    pd.to_numeric(df["open_interest"], errors="coerce")
+                      .fillna(0).astype(int)
+                    if "open_interest" in df.columns
+                    else pd.Series(0, index=df.index)),
+                "iv": float("nan"),
+                "delta": float("nan"),
+                "underlying_price": float("nan"),
+            })
+            frames.append(out.dropna(subset=["quote_date", "strike"]))
+    if not frames:
+        raise FileNotFoundError(f"no puts_*.csv under {data_dir}")
+    frame = pd.concat(frames, ignore_index=True)
+
+    # Stamp underlying_price from the aligned as-traded stock files, then
+    # BS-invert IV from two-sided mids (delta follows in chains_for_date).
+    spots = {}
+    for tdir in sorted(p for p in data_dir.iterdir() if p.is_dir()):
+        sf = tdir / "stock_eod.csv"
+        if not sf.exists():
+            continue
+        sdf = load_thetadata_stock(sf)
+        spots[tdir.name] = dict(
+            zip(sdf.index.date, sdf["Close"].astype(float)))
+    frame["underlying_price"] = [
+        spots.get(t, {}).get(d, float("nan"))
+        for t, d in zip(frame["ticker"], frame["quote_date"])
+    ]
+    frame = frame.dropna(subset=["underlying_price"])
+
+    ivs = []
+    for row in frame.itertuples(index=False):
+        if row.bid > 0 and row.ask > 0:
+            mid = (row.bid + row.ask) / 2
+            dte = (row.expiration - row.quote_date).days
+            ivs.append(_invert_bs_iv(mid, row.underlying_price,
+                                     row.strike, dte))
+        else:
+            ivs.append(None)
+    frame["iv"] = pd.array(ivs, dtype="float64")
+
+    meta = {"source": str(data_dir), "includes_delisted": True,
+            "note": "ThetaData serves delisted underlyings (FSR verified "
+                    "2026-08-07); OI=0 on FREE-tier pulls (VALUE-gated) — "
+                    "production gates read that as OI-UNKNOWN; iv is "
+                    "BS-inverted from two-sided close mids"}
+    return frame[NORMALIZED_COLUMNS], meta
+
+
+def load_thetadata_stock(path) -> pd.DataFrame:
+    """One stock_eod.csv -> OHLCV DataFrame indexed by date (as-traded)."""
+    df = pd.read_csv(path)
+    idx = pd.DatetimeIndex(pd.to_datetime(df["created"]).dt.normalize())
+    # .to_numpy() strips the source RangeIndex — passing the Series directly
+    # would silently reindex them against idx into all-NaN (alignment).
+    return pd.DataFrame({
+        "Close": pd.to_numeric(df["close"], errors="coerce").to_numpy(),
+        "Volume": pd.to_numeric(df["volume"], errors="coerce")
+            .fillna(0.0).to_numpy(),
+    }, index=idx).dropna(subset=["Close"])
+
+
+def load_thetadata_prices(data_dir) -> dict[str, pd.DataFrame]:
+    """{ticker: OHLCV frame} from every stock_eod.csv under data_dir."""
+    data_dir = Path(data_dir)
+    out = {}
+    for tdir in sorted(p for p in data_dir.iterdir() if p.is_dir()):
+        sf = tdir / "stock_eod.csv"
+        if sf.exists():
+            try:
+                out[tdir.name] = load_thetadata_stock(sf)
+            except Exception as e:
+                logger.warning(f"{sf}: unreadable ({e})")
+    return out
 
 
 # ---------------------------------------------------------------------------

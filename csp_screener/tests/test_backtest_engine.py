@@ -293,6 +293,44 @@ class TestLoader:
             {"XX": px}, late, config.PRICE_MIN, config.PRICE_MAX,
             config.MIN_DAILY_VOLUME) == []
 
+    def test_thetadata_stock_loader_alignment(self, tmp_path):
+        """Regression: constructing the OHLCV frame from Series carrying
+        their own RangeIndex silently reindexed everything to NaN against
+        the DatetimeIndex — 126 valid rows loaded as 0 in the pilot."""
+        csv = tmp_path / "stock_eod.csv"
+        csv.write_text(
+            "created,last_trade,open,high,low,close,volume,count\n"
+            "2023-07-03T17:21:05.213,x,11.9,12.02,11.84,12.02,8881951,39706\n"
+            "2023-07-05T17:16:11.520,x,11.91,12.35,11.88,12.12,20584137,76707\n")
+        df = data_loader.load_thetadata_stock(csv)
+        assert len(df) == 2
+        assert df["Close"].iloc[0] == pytest.approx(12.02)
+        assert df.index.date[0] == date(2023, 7, 3)
+
+    def test_thetadata_dir_loader_roundtrip(self, tmp_path):
+        """puts CSV + stock CSV -> normalized frame with stamped spot and
+        BS-inverted IV for two-sided rows."""
+        tdir = tmp_path / "SNAP"
+        tdir.mkdir()
+        (tdir / "stock_eod.csv").write_text(
+            "created,close,volume\n2023-07-07T17:22:00,12.02,8881951\n")
+        (tdir / "puts_2023-09-15.csv").write_text(
+            "symbol,expiration,strike,right,created,last_trade,open,high,low,"
+            "close,volume,count,bid_size,bid_exchange,bid,bid_condition,"
+            "ask_size,ask_exchange,ask,ask_condition\n"
+            '"SNAP","2023-09-15",11.000,"PUT",2023-07-07T17:22:00.204,x,'
+            "0.5,0.6,0.5,0.55,60,4,744,46,0.54,50,29,7,0.56,50\n"
+            '"SNAP","2023-09-15",8.000,"PUT",2023-07-07T17:22:00.204,x,'
+            "0,0,0,0.05,0,0,0,46,0.00,50,0,7,0.00,50\n")
+        frame, meta = data_loader.load_thetadata_dir(tmp_path)
+        assert len(frame) == 2
+        assert meta["includes_delisted"] is True
+        row = frame[frame["strike"] == 11.0].iloc[0]
+        assert row["underlying_price"] == pytest.approx(12.02)
+        assert 0.3 < row["iv"] < 1.5  # inverted from the 0.55 mid
+        one_sided = frame[frame["strike"] == 8.0].iloc[0]
+        assert pd.isna(one_sided["iv"])
+
     def test_universe_asof_rejects_non_datetime_index(self):
         px = pd.DataFrame({"Close": [10.0, 11.0],
                            "Volume": [2e6, 2e6]})  # RangeIndex
