@@ -482,6 +482,7 @@ def update_all_open_positions(
     today: Optional[datetime] = None,
     eur_usd_rate: Optional[float] = None,
     quote_resolver=None,
+    market_open: Optional[bool] = None,
 ) -> dict:
     """
     Loop through every open virtual trade, re-price, close if exit triggers.
@@ -489,7 +490,20 @@ def update_all_open_positions(
     spot_resolver(ticker) -> float: current spot price
     iv_resolver(ticker) -> float: current vol estimate (use realized vol)
 
-    Returns summary: {'updated': N, 'closed': N, 'closed_pnl_total': $X}
+    market_open: MARKET-HOURS EXIT EXECUTION. A real position can only be
+    closed while the market trades — an exit rule crossing on an after-hours
+    mark is a detection, not a fill (a GTC buyback fills intraday or not at
+    all). When market_open is False, exits are DEFERRED: the position stays
+    open and re-evaluates on the next market-open run, where the close can
+    take a REAL quote instead of a model mark. (Root cause of the 0%%
+    market-marked closes: DTE exits kept executing on the after-hours EOD
+    cron — SLV/SOFI closed at 00:27 UTC on model marks their live quotes
+    would have passed intraday.) Exceptions: expiration (dte 0) settles
+    immediately — model price at expiry IS intrinsic; and market_open=None
+    keeps the legacy close-immediately behavior for existing callers.
+
+    Returns summary: {'updated': N, 'closed': N, 'deferred': N,
+    'closed_pnl_total': $X}
     """
     today = today or datetime.now()
     open_trades = get_open_virtual_trades()
@@ -497,6 +511,7 @@ def update_all_open_positions(
     summary = {
         "updated": 0,
         "closed": 0,
+        "deferred": 0,
         "closed_pnl_total": 0.0,
         "details": [],
     }
@@ -513,6 +528,26 @@ def update_all_open_positions(
             result = evaluate_open_position(
                 trade, spot, iv, today=today, market_price=market_price)
             summary["updated"] += 1
+
+            if result["exit_now"] and market_open is False and result["dte_remaining"] > 0:
+                # Market closed and not expiry: detection, not a fill. The
+                # position re-evaluates fresh next run — if the crossing was
+                # a model artifact that recedes by the open, no exit happens,
+                # which is exactly what a real GTC order would have done.
+                summary["deferred"] += 1
+                summary["details"].append({
+                    "trade_id": trade.trade_id,
+                    "action": "exit_deferred",
+                    "reason": result["exit_reason"],
+                    "pnl_now": result["pnl"],
+                    "dte_remaining": result["dte_remaining"],
+                    "mark_source": result["mark_source"],
+                })
+                logger.info(
+                    f"Exit {result['exit_reason']} for {trade.trade_id} "
+                    f"deferred — market closed; executes on the next "
+                    f"market-open run")
+                continue
 
             if result["exit_now"]:
                 close_record = close_virtual_position(

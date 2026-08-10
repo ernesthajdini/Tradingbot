@@ -54,6 +54,20 @@ def test_us_market_likely_open_boundaries():
     assert not us_market_likely_open(datetime(2026, 7, 20, 13, 0))   # pre-open
 
 
+def test_us_market_open_is_dst_correct_not_a_utc_union():
+    """Adversarial review, executed proof: the old 13:30-21:00 UTC union
+    counted 20:35 UTC in SUMMER (16:35 EDT — after the close) as open, so
+    the last hourly cron slot executed exits on after-hours model marks
+    daily for ~8 months a year — the exact pathology the deferral fixes.
+    The gate must be computed in actual America/New_York time."""
+    # Summer (EDT): market closes 20:00 UTC — the 20:35 cron slot is SHUT
+    assert not us_market_likely_open(datetime(2026, 8, 10, 20, 35))
+    # Winter (EST): 20:35 UTC is 15:35 ET — genuinely open, keep the slot
+    assert us_market_likely_open(datetime(2026, 1, 15, 20, 35))
+    # Winter pre-open: 13:45 UTC is 08:45 ET — shut (union counted it open)
+    assert not us_market_likely_open(datetime(2026, 1, 15, 13, 45))
+
+
 def test_no_trade_banner_says_quotes_unavailable_when_market_closed():
     html = notify.render_live_section([], True, {"market_open": False})
     assert "QUOTES UNAVAILABLE" in html
@@ -189,6 +203,107 @@ def test_update_all_uses_quote_resolver_and_stamps_source():
     closes = journal.read_filtered("virtual_trades", event="close")
     assert "mark_source=market" in closes[0]["notes"]
     assert closes[0]["final_put_price"] == pytest.approx(20.0)
+
+
+# ---------------------------------------------------------------------------
+# Market-hours exit execution: an off-hours exit crossing is a DETECTION,
+# not a fill. Root cause of the 0%-market-marked closes: DTE exits kept
+# executing on the after-hours EOD cron (SLV/SOFI closed 00:27 UTC on model
+# marks their live quotes would have passed intraday).
+# ---------------------------------------------------------------------------
+
+def _open_wen_position():
+    from csp_screener.setup_generator import VirtualSetup
+    s = VirtualSetup(
+        ticker="WEN", spot_at_screen=8.0,
+        expiration=EXP.date().isoformat(), dte=35, strike=6.0,
+        pct_otm=0.25, delta=-0.10, iv=0.6,
+        bid=0.39, ask=0.41, mid=0.40, bid_ask_pct=0.05,
+        open_interest=1000, volume=100,
+        estimated_credit_per_contract=40.0, max_loss_per_contract=560.0,
+        breakeven=5.6, data_quality="ibkr_greeks", reasoning=[],
+    )
+    return virtual_tracker.open_virtual_position(s, "screen_defer")
+
+
+def test_offhours_exit_defers_instead_of_model_closing():
+    """today=NOW pins the clock — without it this test goes red the day the
+    fixture expiration passes (dte 0 ⇒ settlement overrides deferral)."""
+    _open_wen_position()
+    summary = virtual_tracker.update_all_open_positions(
+        spot_resolver=lambda t: 8.0, iv_resolver=lambda t: 0.6,
+        quote_resolver=lambda tr: 15.0,  # TP crossed (62% of credit captured)
+        today=NOW, market_open=False,
+    )
+    assert summary["closed"] == 0
+    assert summary["deferred"] == 1
+    assert summary["details"][0]["action"] == "exit_deferred"
+    assert journal.read_filtered("virtual_trades", event="close") == []
+    # Position must still be open for the next run to re-evaluate
+    assert len(virtual_tracker.get_open_virtual_trades()) == 1
+
+
+def test_market_open_run_executes_the_deferred_exit():
+    _open_wen_position()
+    virtual_tracker.update_all_open_positions(
+        spot_resolver=lambda t: 8.0, iv_resolver=lambda t: 0.6,
+        quote_resolver=lambda tr: 15.0, today=NOW, market_open=False)
+    summary = virtual_tracker.update_all_open_positions(
+        spot_resolver=lambda t: 8.0, iv_resolver=lambda t: 0.6,
+        quote_resolver=lambda tr: 15.0, today=NOW, market_open=True)
+    assert summary["closed"] == 1
+    closes = journal.read_filtered("virtual_trades", event="close")
+    assert "mark_source=market" in closes[0]["notes"]
+
+
+def test_expiration_settles_even_when_market_closed():
+    """dte 0 is settlement, not execution — model price at expiry IS
+    intrinsic. Must never defer past expiration."""
+    _open_wen_position()
+    after_expiry = EXP + timedelta(days=0)
+    summary = virtual_tracker.update_all_open_positions(
+        spot_resolver=lambda t: 8.0, iv_resolver=lambda t: 0.6,
+        today=after_expiry, market_open=False,
+    )
+    assert summary["closed"] == 1
+    assert summary["deferred"] == 0
+
+
+def test_default_market_open_none_keeps_legacy_behavior():
+    """Callers that don't pass market_open (older code, tests) must see the
+    close-immediately behavior unchanged."""
+    _open_wen_position()
+    summary = virtual_tracker.update_all_open_positions(
+        spot_resolver=lambda t: 8.0, iv_resolver=lambda t: 0.6,
+        quote_resolver=lambda tr: 15.0,
+    )
+    assert summary["closed"] == 1
+
+
+def test_shadow_book_defers_offhours_exits_identically():
+    """Cohort symmetry: the shadow book must apply the same execution rule.
+    mark_open_shadows has no injectable clock, so the expiration is derived
+    from the wall clock — a fixed date would flip this test to settlement
+    (and red) the day it passes."""
+    from csp_screener import shadow_book
+    from csp_screener.setup_generator import VirtualSetup
+    s = VirtualSetup(
+        ticker="WEN", spot_at_screen=8.0,
+        expiration=(datetime.now() + timedelta(days=35)).date().isoformat(),
+        dte=35, strike=6.0,
+        pct_otm=0.25, delta=-0.10, iv=0.6,
+        bid=0.39, ask=0.41, mid=0.40, bid_ask_pct=0.05,
+        open_interest=1000, volume=100,
+        estimated_credit_per_contract=40.0, max_loss_per_contract=560.0,
+        breakeven=5.6, data_quality="ibkr_greeks", reasoning=[],
+    )
+    shadow_book.open_shadow_position(s, "scr_defer", "rank_cutoff", 6)
+    # Force a model TP crossing: spot deep above strike + low IV -> put ~0
+    summary = shadow_book.mark_open_shadows(
+        lambda t: 12.0, lambda t: 0.10, market_open=False)
+    assert summary["closed"] == 0
+    assert summary["deferred"] == 1
+    assert len(shadow_book.get_open_shadow_trades()) == 1
 
 
 # ---------------------------------------------------------------------------

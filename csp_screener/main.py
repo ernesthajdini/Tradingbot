@@ -86,23 +86,30 @@ def step_mark_virtual_to_market(price_data: dict, eur_usd_rate=None) -> dict:
 
     # Market-quote marks only make sense while the market can quote —
     # otherwise every fetch is a wasted network call that returns None
-    # anyway (the two-sided-quote gate rejects after-hours rows).
+    # anyway (the two-sided-quote gate rejects after-hours rows). The same
+    # flag drives market-hours exit execution: off-hours exit crossings
+    # defer to the next open run instead of closing on a model mark.
+    market_open = us_market_likely_open()
     quote_resolver = (virtual_tracker.market_quote_resolver
-                      if us_market_likely_open() else None)
+                      if market_open else None)
     summary = virtual_tracker.update_all_open_positions(
         spot_resolver, iv_resolver, eur_usd_rate=eur_usd_rate,
-        quote_resolver=quote_resolver)
+        quote_resolver=quote_resolver, market_open=market_open)
     logger.info(
         f"Virtual mark-to-market: {summary['updated']} updated, "
-        f"{summary['closed']} closed (PnL ${summary['closed_pnl_total']:+.2f})"
+        f"{summary['closed']} closed (PnL ${summary['closed_pnl_total']:+.2f}), "
+        f"{summary.get('deferred', 0)} exit(s) deferred to market hours"
     )
     # Shadow book marks AFTER production (the production pass warms the
-    # per-run quote cache the shadows free-ride on). Never breaks a run.
+    # per-run quote cache the shadows free-ride on). Reuses the SAME
+    # market_open flag — recomputing after minutes of quote fetches could
+    # straddle the session boundary and give the two cohorts different
+    # execution rules within one run. Never breaks a run.
     try:
         from csp_screener import shadow_book
         summary["shadow"] = shadow_book.mark_open_shadows(
             spot_resolver, iv_resolver, eur_usd_rate=eur_usd_rate,
-            market_open=us_market_likely_open())
+            market_open=market_open)
     except Exception as e:
         logger.warning(f"Shadow marking skipped (non-fatal): {e}")
     return summary
@@ -304,18 +311,32 @@ def step_generate_setups(ranked, ibkr_client=None, tier: str = "sandbox") -> lis
 
 def us_market_likely_open(now: datetime | None = None) -> bool:
     """
-    Coarse check: is the US equity market plausibly open right now (UTC)?
-    Used only for LABELING — 'no live quotes' outside these hours means
-    'market closed', not 'no trade qualified'. Covers both DST regimes
-    (13:30-20:00 UTC summer, 14:30-21:00 winter) by accepting the union.
-    Holidays are not modeled; worst case a holiday run is labeled as a
-    market verdict, which the near-miss ledger then clarifies.
+    Is the US equity market plausibly open right now? Computed in ACTUAL
+    America/New_York time (09:30-16:00 ET, Mon-Fri), not a UTC union.
+
+    History: this started as a coarse DST-union window (13:30-21:00 UTC)
+    "used only for LABELING" — then market-hours exit execution promoted it
+    to gating real behavior, and the adversarial review proved the union
+    leaked: the 20:35 UTC cron slot is 16:35 EDT, AFTER the close, yet
+    counted as open — so exits still executed there on after-hours model
+    marks daily for the ~8 EDT months (the exact pathology the deferral
+    exists to stop), and winter 13:30-14:30 UTC counted pre-open hours as
+    open. DST-correct ET closes both holes; no legitimate slot is lost.
+
+    `now` naive = interpreted as UTC (matches all callers and the crons).
+    Holidays are still not modeled; worst case a holiday run executes at a
+    model mark, same exposure as before.
     """
+    from datetime import timezone
+    from zoneinfo import ZoneInfo
     now = now or datetime.utcnow()
-    if now.weekday() >= 5:
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    et = now.astimezone(ZoneInfo("America/New_York"))
+    if et.weekday() >= 5:
         return False
-    minutes = now.hour * 60 + now.minute
-    return (13 * 60 + 30) <= minutes < (21 * 60)
+    minutes = et.hour * 60 + et.minute
+    return (9 * 60 + 30) <= minutes < (16 * 60)
 
 
 def step_open_virtual_positions(
@@ -853,7 +874,8 @@ def run_weekly_screen(
         # 12. Deadman success ping
         ping_msg = (
             f"OK candidates={len(candidates)} opened={len(opened)} "
-            f"closed={mark_summary['closed']} VIX={vix or 'na'}"
+            f"closed={mark_summary['closed']} "
+            f"deferred={mark_summary.get('deferred', 0)} VIX={vix or 'na'}"
         )
         deadman.ping_success(ping_msg)
         logger.info(f"Run complete: {ping_msg}")

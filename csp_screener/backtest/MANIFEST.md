@@ -71,6 +71,13 @@ every run log so drift is detectable.
 - **Earnings gate:** without a historical earnings calendar the blackout
   filter cannot replay; such runs are stamped `earnings_gate: unavailable`
   and cannot be used to tune anything earnings-adjacent.
+- **Fill-convention divergence (declared 2026-08-10):** the engine fills
+  exits at the crossing day's EOD historical quote; the live paper record
+  fills at the NEXT market-open run (market-hours exit execution), so a
+  marginal crossing that recedes overnight never fills live. The backtest
+  therefore realizes take-profits slightly earlier/more often than forward
+  paper. Any backtest-vs-paper comparison must name this convention gap
+  before attributing the difference to strategy decay.
 
 ## 5. What a "kill" result means
 

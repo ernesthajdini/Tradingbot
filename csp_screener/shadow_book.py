@@ -431,8 +431,8 @@ def mark_open_shadows(
     production, so no shadow number ever launders its provenance.
     """
     trades = get_open_shadow_trades()
-    summary = {"updated": 0, "closed": 0, "closed_pnl_total": 0.0,
-               "quotes_spent": 0, "details": []}
+    summary = {"updated": 0, "closed": 0, "deferred": 0,
+               "closed_pnl_total": 0.0, "quotes_spent": 0, "details": []}
     if not trades:
         return summary
 
@@ -482,6 +482,19 @@ def mark_open_shadows(
             result = evaluate_open_position(
                 trade, spot, iv, market_price=market_price)
             summary["updated"] += 1
+            # Market-hours exit execution — SAME rule as production
+            # (virtual_tracker.update_all_open_positions): an off-hours exit
+            # crossing is a detection, not a fill. Cohort symmetry demands
+            # identical execution semantics on both sides of the contrast.
+            # NOTE the defaults differ deliberately: production's
+            # market_open=None means "legacy close-now" (old callers keep
+            # their contract); here the default False means "closed" — the
+            # conservative reading for a param that also gates quote spend.
+            # Both real call sites pass the flag explicitly.
+            if (result["exit_now"] and not market_open
+                    and result["dte_remaining"] > 0):
+                summary["deferred"] += 1
+                continue
             if result["exit_now"]:
                 close_record = close_shadow_position(
                     trade,
@@ -508,6 +521,7 @@ def mark_open_shadows(
     logger.info(
         f"Shadow marks: {summary['updated']} updated, {summary['closed']} "
         f"closed (PnL ${summary['closed_pnl_total']:+.2f}), "
+        f"{summary['deferred']} exit(s) deferred to market hours, "
         f"{summary['quotes_spent']} fresh quotes spent")
     return summary
 

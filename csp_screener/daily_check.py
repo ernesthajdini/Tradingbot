@@ -97,24 +97,28 @@ def run() -> int:
 
         eur_usd = data_pipeline.get_eurusd_rate() if config.TRACK_EUR else None
         from csp_screener.main import us_market_likely_open
+        market_open = us_market_likely_open()
         quote_resolver = (virtual_tracker.market_quote_resolver
-                          if us_market_likely_open() else None)
+                          if market_open else None)
         summary = virtual_tracker.update_all_open_positions(
             spot_resolver, iv_resolver, eur_usd_rate=eur_usd,
-            quote_resolver=quote_resolver)
+            quote_resolver=quote_resolver, market_open=market_open)
         logger.info(
             f"Daily update: {summary['updated']} marked, "
-            f"{summary['closed']} closed (PnL ${summary['closed_pnl_total']:+.2f})"
+            f"{summary['closed']} closed (PnL ${summary['closed_pnl_total']:+.2f}), "
+            f"{summary.get('deferred', 0)} exit(s) deferred to market hours"
         )
 
         # Shadow book marks AFTER production — free-rides the warm quote
-        # cache, spends its own capped fetch budget, never fatal.
+        # cache, spends its own capped fetch budget, never fatal. Reuses the
+        # SAME market_open flag so both cohorts share one execution rule
+        # even if the run straddles the session boundary.
         shadow_summary = None
         try:
             from csp_screener import shadow_book
             shadow_summary = shadow_book.mark_open_shadows(
                 spot_resolver, iv_resolver, eur_usd_rate=eur_usd,
-                market_open=us_market_likely_open())
+                market_open=market_open)
         except Exception as e:
             logger.warning(f"Shadow marking skipped (non-fatal): {e}")
 
@@ -125,11 +129,13 @@ def run() -> int:
             "open_at_start": len(open_trades),
             "updated": summary["updated"],
             "closed": summary["closed"],
+            "deferred": summary.get("deferred", 0),
             "closed_pnl": summary["closed_pnl_total"],
             "details": summary["details"],
             "shadow": ({
                 "updated": shadow_summary["updated"],
                 "closed": shadow_summary["closed"],
+                "deferred": shadow_summary.get("deferred", 0),
                 "closed_pnl": shadow_summary["closed_pnl_total"],
                 "quotes_spent": shadow_summary["quotes_spent"],
             } if shadow_summary else None),
@@ -140,7 +146,8 @@ def run() -> int:
             send_close_notification(summary, price_data)
 
         deadman.ping_success(
-            f"daily marked={summary['updated']} closed={summary['closed']}"
+            f"daily marked={summary['updated']} closed={summary['closed']} "
+            f"deferred={summary.get('deferred', 0)}"
         )
         return 0
     except Exception as e:
