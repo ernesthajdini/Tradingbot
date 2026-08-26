@@ -34,6 +34,7 @@ WORKERS = 4
 RETRIES = [0, 5, 20, 60]
 DATA_START = date(2016, 1, 4)
 DATA_END = date(2026, 8, 25)
+PULL_OI = True  # set False via --no-oi (archive mop-up mode)
 
 
 def _get(path: str, params: dict, sym: str) -> str | None:
@@ -106,8 +107,10 @@ def pull_ticker(sym: str, intervals: list[list[str]]) -> dict:
             lo, hi = max(active0, a, DATA_START), min(exp, b)
             if lo > hi:
                 continue
-            for kind, path in (("puts", "/v3/option/history/eod"),
-                               ("oi", "/v3/option/history/open_interest")):
+            endpoints = [("puts", "/v3/option/history/eod")]
+            if PULL_OI:
+                endpoints.append(("oi", "/v3/option/history/open_interest"))
+            for kind, path in endpoints:
                 out = tdir / f"{kind}_{exp.isoformat()}.csv"
                 if out.exists():
                     counts["skip"] += 1
@@ -133,6 +136,13 @@ def pull_ticker(sym: str, intervals: list[list[str]]) -> dict:
 
 
 def main() -> int:
+    # --no-oi: ARCHIVE MODE for the mop-up of never-ranked names — halves
+    # the request count so the full universe fits inside the paid month.
+    # Study-critical names get OI via options_pull_ranked.py first; a
+    # second OI pass can run if subscription time remains.
+    global PULL_OI
+    PULL_OI = "--no-oi" not in sys.argv
+
     members = json.loads((DATA / "members.json").read_text(encoding="utf-8"))
     tickers = members["tickers"]
     # Union of both tiers' intervals per ticker
@@ -141,8 +151,15 @@ def main() -> int:
         iv = [x for spans in tiers.values() for x in spans]
         if iv:
             work[sym] = iv
+    # Most member-days first: if the month ends mid-pull, the names most
+    # likely to ever matter are already on disk.
+    def _days(iv):
+        return sum((date.fromisoformat(b) - date.fromisoformat(a)).days + 1
+                   for a, b in iv)
+    work = dict(sorted(work.items(), key=lambda kv: -_days(kv[1])))
     log = open(DATA / "options_pull.log", "a", encoding="utf-8", buffering=1)
-    print(f"{len(work)} member tickers to pull", file=log)
+    print(f"{len(work)} member tickers to pull (oi={'on' if PULL_OI else 'OFF'})",
+          file=log)
     totals = {"puts": 0, "oi": 0, "skip": 0, "empty": 0, "fail": 0}
     t0 = time.time()
     done = 0
