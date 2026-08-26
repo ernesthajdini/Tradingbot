@@ -225,6 +225,104 @@ def load_thetadata_dir(data_dir) -> tuple[pd.DataFrame, dict]:
     return frame[NORMALIZED_COLUMNS], meta
 
 
+def load_thetadata_full(data_root, tickers: Optional[list[str]] = None,
+                        ) -> tuple[pd.DataFrame, dict]:
+    """
+    FULL-STUDY loader for the options_pull_full.py layout:
+        <data_root>/stocks/<SYM>.csv          (as-traded stock EOD)
+        <data_root>/options/<SYM>/puts_<EXP>.csv
+        <data_root>/options/<SYM>/oi_<EXP>.csv
+    Differences vs load_thetadata_dir (pilot layout): stock files live in a
+    shared stocks/ dir, and OPEN INTEREST arrives as separate files merged
+    here by (quote_date, strike) — the entry gates enforce MIN_OPEN_INTEREST
+    when OI is known, so the merge is gate fidelity, not decoration.
+    tickers: optional subset (chunked study runs); default = all pulled.
+    """
+    data_root = Path(data_root)
+    opt_root = data_root / "options"
+    frames = []
+    names = tickers or sorted(p.name for p in opt_root.iterdir() if p.is_dir())
+    for ticker in names:
+        tdir = opt_root / ticker
+        if not tdir.is_dir():
+            continue
+        stock_csv = data_root / "stocks" / f"{ticker}.csv"
+        if not stock_csv.exists():
+            continue
+        sdf = load_thetadata_stock(stock_csv)
+        spots = dict(zip(sdf.index.date, sdf["Close"].astype(float)))
+        for f in sorted(tdir.glob("puts_*.csv")):
+            if f.stat().st_size < 50:
+                continue
+            try:
+                df = pd.read_csv(f)
+            except Exception:
+                continue
+            if df.empty or "created" not in df.columns:
+                continue
+            exp = date.fromisoformat(f.stem.replace("puts_", ""))
+            out = pd.DataFrame({
+                "quote_date": pd.to_datetime(df["created"]).dt.date,
+                "ticker": ticker,
+                "expiration": exp,
+                "strike": pd.to_numeric(df["strike"], errors="coerce"),
+                "bid": pd.to_numeric(df["bid"], errors="coerce").fillna(0.0),
+                "ask": pd.to_numeric(df["ask"], errors="coerce").fillna(0.0),
+                "last": pd.to_numeric(df["close"], errors="coerce").fillna(0.0),
+                "volume": pd.to_numeric(df["volume"], errors="coerce")
+                    .fillna(0).astype(int),
+                "open_interest": 0,
+                "iv": float("nan"),
+                "delta": float("nan"),
+                "underlying_price": [
+                    spots.get(d, float("nan"))
+                    for d in pd.to_datetime(df["created"]).dt.date],
+            })
+            out = out.dropna(subset=["quote_date", "strike",
+                                     "underlying_price"])
+            if out.empty:
+                continue
+            # OI merge: oi_<EXP>.csv rows are (…,timestamp,open_interest);
+            # the timestamp's date is the OI snapshot day.
+            oi_f = tdir / f"oi_{exp.isoformat()}.csv"
+            if oi_f.exists() and oi_f.stat().st_size > 50:
+                try:
+                    oi = pd.read_csv(oi_f)
+                    oi_map = {
+                        (pd.Timestamp(t).date(), round(float(k), 4)): int(v)
+                        for t, k, v in zip(oi["timestamp"], oi["strike"],
+                                           oi["open_interest"])
+                        if pd.notna(t) and pd.notna(k) and pd.notna(v)
+                    }
+                    out["open_interest"] = [
+                        oi_map.get((d, round(float(k), 4)), 0)
+                        for d, k in zip(out["quote_date"], out["strike"])]
+                except Exception as e:
+                    logger.warning(f"{oi_f}: OI merge failed ({e}) — "
+                                   f"OI stays 0 (OI-UNKNOWN path)")
+            frames.append(out)
+    if not frames:
+        raise FileNotFoundError(f"no usable puts under {opt_root}")
+    frame = pd.concat(frames, ignore_index=True)
+
+    ivs = []
+    for row in frame.itertuples(index=False):
+        if row.bid > 0 and row.ask > 0:
+            mid = (row.bid + row.ask) / 2
+            dte = (row.expiration - row.quote_date).days
+            ivs.append(_invert_bs_iv(mid, row.underlying_price,
+                                     row.strike, dte))
+        else:
+            ivs.append(None)
+    frame["iv"] = pd.array(ivs, dtype="float64")
+
+    meta = {"source": str(data_root), "includes_delisted": True,
+            "note": "full-study layout; OI merged from oi_*.csv; iv "
+                    "BS-inverted from two-sided close mids; 2016 has "
+                    "shortened RV warmup (stock STANDARD floor)"}
+    return frame[NORMALIZED_COLUMNS], meta
+
+
 def load_thetadata_stock(path) -> pd.DataFrame:
     """One stock_eod.csv -> OHLCV DataFrame indexed by date (as-traded)."""
     df = pd.read_csv(path)

@@ -331,6 +331,44 @@ class TestLoader:
         one_sided = frame[frame["strike"] == 8.0].iloc[0]
         assert pd.isna(one_sided["iv"])
 
+    def test_thetadata_full_layout_with_oi_merge(self, tmp_path):
+        """Full-study layout: shared stocks/ dir + per-ticker options/ dir
+        with separate OI files merged by (date, strike)."""
+        (tmp_path / "stocks").mkdir()
+        (tmp_path / "stocks" / "SNAP.csv").write_text(
+            "created,close,volume\n2023-07-07T17:22:00,12.02,8881951\n")
+        tdir = tmp_path / "options" / "SNAP"
+        tdir.mkdir(parents=True)
+        (tdir / "puts_2023-09-15.csv").write_text(
+            "symbol,expiration,strike,right,created,last_trade,open,high,low,"
+            "close,volume,count,bid_size,bid_exchange,bid,bid_condition,"
+            "ask_size,ask_exchange,ask,ask_condition\n"
+            '"SNAP","2023-09-15",11.000,"PUT",2023-07-07T17:22:00.204,x,'
+            "0.5,0.6,0.5,0.55,60,4,744,46,0.54,50,29,7,0.56,50\n")
+        (tdir / "oi_2023-09-15.csv").write_text(
+            "symbol,expiration,strike,right,timestamp,open_interest\n"
+            '"SNAP","2023-09-15",11.000,"PUT",2023-07-07T06:30:00.000,2447\n')
+        frame, meta = data_loader.load_thetadata_full(tmp_path)
+        assert len(frame) == 1
+        assert frame.iloc[0]["open_interest"] == 2447
+        assert frame.iloc[0]["underlying_price"] == pytest.approx(12.02)
+        assert meta["includes_delisted"] is True
+
+    def test_thetadata_full_missing_oi_stays_zero(self, tmp_path):
+        (tmp_path / "stocks").mkdir()
+        (tmp_path / "stocks" / "SNAP.csv").write_text(
+            "created,close,volume\n2023-07-07T17:22:00,12.02,8881951\n")
+        tdir = tmp_path / "options" / "SNAP"
+        tdir.mkdir(parents=True)
+        (tdir / "puts_2023-09-15.csv").write_text(
+            "symbol,expiration,strike,right,created,last_trade,open,high,low,"
+            "close,volume,count,bid_size,bid_exchange,bid,bid_condition,"
+            "ask_size,ask_exchange,ask,ask_condition\n"
+            '"SNAP","2023-09-15",11.000,"PUT",2023-07-07T17:22:00.204,x,'
+            "0.5,0.6,0.5,0.55,60,4,744,46,0.54,50,29,7,0.56,50\n")
+        frame, _ = data_loader.load_thetadata_full(tmp_path)
+        assert frame.iloc[0]["open_interest"] == 0  # OI-UNKNOWN path
+
     def test_universe_asof_rejects_non_datetime_index(self):
         px = pd.DataFrame({"Close": [10.0, 11.0],
                            "Volume": [2e6, 2e6]})  # RangeIndex
