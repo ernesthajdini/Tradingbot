@@ -226,6 +226,7 @@ def load_thetadata_dir(data_dir) -> tuple[pd.DataFrame, dict]:
 
 
 def load_thetadata_full(data_root, tickers: Optional[list[str]] = None,
+                        compute_iv: bool = True,
                         ) -> tuple[pd.DataFrame, dict]:
     """
     FULL-STUDY loader for the options_pull_full.py layout:
@@ -305,16 +306,20 @@ def load_thetadata_full(data_root, tickers: Optional[list[str]] = None,
         raise FileNotFoundError(f"no usable puts under {opt_root}")
     frame = pd.concat(frames, ignore_index=True)
 
-    ivs = []
-    for row in frame.itertuples(index=False):
-        if row.bid > 0 and row.ask > 0:
-            mid = (row.bid + row.ask) / 2
-            dte = (row.expiration - row.quote_date).days
-            ivs.append(_invert_bs_iv(mid, row.underlying_price,
-                                     row.strike, dte))
-        else:
-            ivs.append(None)
-    frame["iv"] = pd.array(ivs, dtype="float64")
+    # compute_iv=False: the caller (day_store) inverts IV vectorized over the
+    # whole batch — the row-at-a-time bisection below is fine for the pilot's
+    # thousands of rows and hopeless for the study's millions.
+    if compute_iv:
+        ivs = []
+        for row in frame.itertuples(index=False):
+            if row.bid > 0 and row.ask > 0:
+                mid = (row.bid + row.ask) / 2
+                dte = (row.expiration - row.quote_date).days
+                ivs.append(_invert_bs_iv(mid, row.underlying_price,
+                                         row.strike, dte))
+            else:
+                ivs.append(None)
+        frame["iv"] = pd.array(ivs, dtype="float64")
 
     meta = {"source": str(data_root), "includes_delisted": True,
             "note": "full-study layout; OI merged from oi_*.csv; iv "
@@ -323,17 +328,69 @@ def load_thetadata_full(data_root, tickers: Optional[list[str]] = None,
     return frame[NORMALIZED_COLUMNS], meta
 
 
+_SPLITS_CACHE: dict = {}
+
+
+def _split_factors(ticker: str, idx: pd.DatetimeIndex):
+    """Cumulative split factor per row: prices BEFORE a split are divided by
+    its ratio, which is what makes a split-adjusted series continuous."""
+    if ticker not in _SPLITS_CACHE:
+        f = (Path(__file__).resolve().parent / "data" / "thetadata_full"
+             / "splits" / f"{ticker}.csv")
+        rows = []
+        if f.exists():
+            for line in f.read_text(encoding="utf-8").splitlines()[1:]:
+                try:
+                    d, r = line.split(",")
+                    rows.append((date.fromisoformat(d), float(r)))
+                except ValueError:
+                    continue
+        _SPLITS_CACHE[ticker] = rows
+    rows = _SPLITS_CACHE[ticker]
+    if not rows:
+        return None
+    factors = np.ones(len(idx))
+    days = idx.date
+    for d, ratio in rows:
+        if ratio and ratio > 0:
+            factors[days < d] /= ratio
+    return factors
+
+
 def load_thetadata_stock(path) -> pd.DataFrame:
     """One stock_eod.csv -> OHLCV DataFrame indexed by date (as-traded)."""
     df = pd.read_csv(path)
     idx = pd.DatetimeIndex(pd.to_datetime(df["created"]).dt.normalize())
     # .to_numpy() strips the source RangeIndex — passing the Series directly
     # would silently reindex them against idx into all-NaN (alignment).
-    return pd.DataFrame({
+    out = pd.DataFrame({
         "Close": pd.to_numeric(df["close"], errors="coerce").to_numpy(),
         "Volume": pd.to_numeric(df["volume"], errors="coerce")
             .fillna(0.0).to_numpy(),
     }, index=idx).dropna(subset=["Close"])
+    # VENDOR ENCODING, cleaned and stamped: a session with no trades is
+    # served as close=0.0, not as a missing row — measured at 1.45% of bars
+    # across 37.8% of tickers. A zero is NOT a price: it makes log returns
+    # +/-inf (poisoning 20-day RV windows, after which production's dropna
+    # silently falls back to a STALE percentile) and, far worse, could reach
+    # strike selection and the model marks as a $0 spot. Treated as the
+    # missing data it is.
+    out = out[out["Close"] > 0]
+    # CORPORATE-ACTION PARITY. Production computes realized vol from yfinance
+    # "Adj Close" (data_pipeline.py:185) — split and dividend adjusted — and
+    # uses raw "Close" only for the spot. ThetaData serves AS-TRADED closes,
+    # so replaying them raw drops split jumps straight into the trailing vol
+    # window: EDU's 10:1 (168.72 -> 17.64) and USO's 1:8 reverse split made
+    # the vol input explode, the BS model mark absurd, and manufactured
+    # stop-losses that no real quote ever confirmed. Adding the adjusted
+    # column here is enough: BOTH consumers (the ranker's RV percentile and
+    # the model-mark vol) already prefer "Adj Close" when present, exactly
+    # as they do in production. Names with no split file are unadjusted —
+    # correct for the ~90% that never split, and stamped for the rest.
+    f = _split_factors(Path(path).stem, out.index)
+    if f is not None:
+        out["Adj Close"] = out["Close"].to_numpy() * f
+    return out
 
 
 def load_thetadata_prices(data_dir) -> dict[str, pd.DataFrame]:
@@ -374,11 +431,23 @@ def _estimate_put_delta_asof(
         return None
 
 
+def day_rows(frame, asof: date) -> pd.DataFrame:
+    """One day's quotes. Accepts either a plain normalized DataFrame (pilot
+    scale) or anything exposing .day(asof) — the DayStore, which keeps the
+    study's 14.9M rows on disk and streams a day at a time."""
+    day_fn = getattr(frame, "day", None)
+    if callable(day_fn):
+        return day_fn(asof)
+    return frame[frame["quote_date"] == asof]
+
+
 def chains_for_date(
-    frame: pd.DataFrame,
+    frame,
     asof: date,
     dte_min: int,
     dte_max: int,
+    tickers: Optional[set] = None,
+    require_two_sided: bool = False,
 ) -> dict[str, OptionsChain]:
     """
     Build {ticker: OptionsChain} for one historical date, restricted to the
@@ -390,7 +459,24 @@ def chains_for_date(
     EOD vendor rows are point-in-time by construction. The monotonicity and
     IV-hygiene defenses still apply via the setup path's sanity gates.
     """
-    day = frame[frame["quote_date"] == asof]
+    day = day_rows(frame, asof)
+    if tickers is not None:
+        # Build chains ONLY for the names that can be traded today. A study
+        # day holds ~8k quotes across ~1.2k tickers; the screener looks at 5.
+        # Materializing every OptionContract was ~99% waste.
+        day = day[day["ticker"].isin(tickers)]
+    if require_two_sided:
+        # YOU CANNOT SELL AT A PRICE NOBODY BIDS. production's _pick_best_put
+        # tolerates bid=ask=0 and anchors to lastPrice — a deliberate
+        # WEEKEND allowance (yfinance zeroes quotes after the close), not a
+        # statement that the contract is fillable. Replayed against EOD
+        # vendor data, that allowance silently admitted contracts with no
+        # bidder at all: the audit measured 61% of the first study run's
+        # entries (median credit $5.00) opened on zero-bid contracts, and
+        # they carried ~80% of the reported loss. The acting production run
+        # screens at 15:05 UTC with the market OPEN, so a two-sided quote is
+        # the faithful equivalent — and it is the live tier's explicit rule.
+        day = day[(day["bid"] > 0) & (day["ask"] > 0)]
     chains: dict[str, OptionsChain] = {}
     for ticker, rows in day.groupby("ticker"):
         spot = float(rows["underlying_price"].iloc[-1])
@@ -442,12 +528,26 @@ def universe_asof(
     price_min: float,
     price_max: float,
     min_volume: float,
+    max_stale_days: int = 0,
 ) -> list[str]:
     """
     As-of-date universe reconstruction: which tickers would the production
     price-band + volume filters have admitted ON THIS DATE? `prices` must
     include names that later died — a universe of today's survivors replayed
     over history is survivorship fiction (MANIFEST rail).
+
+    STALENESS GATE (max_stale_days): a ticker must have a bar within this
+    many days of `asof`. Without it, a DEAD ticker haunts the universe
+    forever at its final frozen price — RMG stopped trading 2020-12-29 and
+    was still being ranked into the top-5 on 2024-10-28 at its frozen $27,
+    with a frozen RV percentile (caught by verify_ranking.py). Production
+    has this guard (data_pipeline.is_stale, applied in main's context
+    build); the replay path never did.
+
+    Default 0 = the ticker must have a bar ON `asof`. Production tolerates
+    4 days because a live fetch can lag over a weekend/holiday; a replay
+    iterates actual trading days against point-in-time vendor bars, where no
+    such lag exists, so same-day is the faithful equivalent.
     """
     out = []
     for ticker, df in prices.items():
@@ -462,6 +562,8 @@ def universe_asof(
         hist = df[df.index.date <= asof]
         if hist.empty:
             continue
+        if (asof - hist.index[-1].date()).days > max_stale_days:
+            continue  # delisted / halted — not a tradeable name on this date
         px = float(hist["Close"].iloc[-1])
         vol = float(hist["Volume"].tail(20).mean()) if "Volume" in hist.columns else 0.0
         if price_min <= px <= price_max and vol >= min_volume:

@@ -104,7 +104,14 @@ def pull_ticker(sym: str, intervals: list[list[str]]) -> dict:
     for exp in sorted(set(exps)):
         active0 = exp - timedelta(days=EXPIRY_ACTIVE_DAYS)
         for a, b in spans:
-            lo, hi = max(active0, a, DATA_START), min(exp, b)
+            # Membership decides WHETHER to pull this expiration; once it
+            # qualifies, pull its FULL active window (same request count,
+            # complete data — this is a permanent archive, not a study
+            # slice, and a half-window file can never be topped up later
+            # because the filename marks the expiration as done).
+            if max(active0, a) > min(exp, b):
+                continue
+            lo, hi = max(active0, DATA_START), min(exp, DATA_END)
             if lo > hi:
                 continue
             endpoints = [("puts", "/v3/option/history/eod")]

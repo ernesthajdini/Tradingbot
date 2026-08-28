@@ -72,25 +72,37 @@ def ticker_daily(csv_path: Path, earnings: list[date] | None):
     out = pd.DataFrame({"close": close.values, "volume": vol.values},
                        index=pd.DatetimeIndex(d)).dropna(subset=["close"])
     out = out[~out.index.duplicated(keep="last")].sort_index()
+    out = out[out["close"] > 0]   # vendor zero-close cleaning, as the loader
     if len(out) < config.RV_WINDOW_DAYS + 10:
         return None
 
-    # ranker.compute_rv_percentile, vectorized: RV = rolling std of log
-    # returns * sqrt(252); percentile = rank of today's RV within the
-    # trailing RV_HISTORY_DAYS values INCLUDING today (<= comparison).
+    # EXACT production semantics (ranker.compute_rv_percentile):
+    #   rv_series = rolling-std annualized, THEN .dropna()
+    #   current   = rv_series.iloc[-1]     <- last VALID value
+    #   history   = rv_series.iloc[-252:]  <- last 252 VALID values
+    # The dropna matters: it compresses out invalid windows, so both the
+    # "current" RV and the percentile denominator come from valid values
+    # only. Ranking over raw row positions instead diverges whenever a
+    # ticker has a gap (verified: AKAO's real denominator was 63, not 252).
+    W, H = config.RV_WINDOW_DAYS, config.RV_HISTORY_DAYS
     log_ret = np.log(out["close"] / out["close"].shift(1))
-    rv = log_ret.rolling(config.RV_WINDOW_DAYS).std() * np.sqrt(252)
-    pct = rv.rolling(config.RV_HISTORY_DAYS, min_periods=1).rank(pct=True) * 100
-    # compute_rv_percentile returns NaN until len(log_ret) >= window+5;
-    # rolling above already yields NaN for the first RV_WINDOW_DAYS rows,
-    # add the +5 guard for exactness.
-    pct.iloc[:config.RV_WINDOW_DAYS + 5] = np.nan
-    # Degenerate flat history (max==min) -> 50.0 in production
-    flat = rv.rolling(config.RV_HISTORY_DAYS, min_periods=1).max() == \
-        rv.rolling(config.RV_HISTORY_DAYS, min_periods=1).min()
-    pct[flat & pct.notna()] = 50.0
-
-    out["rv"] = rv
+    rv_raw = log_ret.rolling(W).std() * np.sqrt(252)
+    rvv = rv_raw.replace([np.inf, -np.inf], np.nan).dropna()
+    if rvv.empty:
+        return None
+    # method="max" reproduces (history <= current).sum(): tied values take
+    # the HIGHEST rank. The default "average" splits ties and diverges.
+    pctv = rvv.rolling(H, min_periods=1).rank(method="max", pct=True) * 100
+    flat = (rvv.rolling(H, min_periods=1).max()
+            == rvv.rolling(H, min_periods=1).min())
+    pctv[flat] = 50.0
+    # Re-expand onto every calendar row: a day inherits the last valid
+    # percentile, exactly what iloc[-1] on the dropna'd series returns when
+    # the newest windows are invalid.
+    out["rv"] = rvv.reindex(out.index).ffill()
+    pct = pctv.reindex(out.index).ffill()
+    # compute_rv_percentile returns NaN until len(log_ret) >= window + 5.
+    pct.iloc[:W + 5] = np.nan
     out["pct"] = pct
     out["avg20"] = out["volume"].rolling(20).mean()
 

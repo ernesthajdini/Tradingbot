@@ -53,6 +53,16 @@ REOPEN_COOLDOWN_DAYS = 3
 # is closed and counted separately (data_ended_closes) so readers see it.
 DATA_ENDED_AFTER_DAYS = 7
 
+# Vol-input hygiene for MODEL marks (backtest-local; production untouched).
+# options_data.MAX_ACCEPTED_IV already declares 3.0 the point past which an
+# implied vol is garbage rather than data. Realized vol computed from
+# as-traded prices can blow past it on a corporate action the split file
+# doesn't cover (AABA's liquidating distribution: RV 374%; EDU pre-fix:
+# 657%), and the blended sigma then prices a put at many times any quote —
+# which is how the first run manufactured stop-losses. Capping the vol INPUT
+# cannot hide a real loss: realised P&L comes from quotes, not from sigma.
+MAX_MODEL_VOL = 3.0
+
 # MANIFEST section 1: the declared grid, as wired today.
 ALLOWED_DTE_WINDOWS = {(25, 45), (30, 45)}
 ALLOWED_TARGET_DELTAS = {0.20, 0.25, 0.30}
@@ -139,12 +149,13 @@ def _position_mark(
     14% of mid — admitted at entry, must not void the mark).
     Inverted spread -> None (never $0).
     """
+    day = data_loader.day_rows(frame, asof)
+
     def leg_mid(strike: float, require_tight: bool = True) -> Optional[float]:
-        rows = frame[
-            (frame["quote_date"] == asof)
-            & (frame["ticker"] == pos.ticker)
-            & (frame["expiration"] == pos.expiration.date())
-            & (frame["strike"].round(4) == round(strike, 4))
+        rows = day[
+            (day["ticker"] == pos.ticker)
+            & (day["expiration"] == pos.expiration.date())
+            & (day["strike"].round(4) == round(strike, 4))
         ]
         if rows.empty:
             return None
@@ -180,6 +191,9 @@ def run(
     vix_lookup: Optional[Callable[[date], Optional[float]]] = None,
     allow_sealed: bool = False,
     write_results: bool = True,
+    candidates_by_date: Optional[dict] = None,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
 ) -> dict:
     """
     Walk the normalized chain frame date by date through the production
@@ -197,7 +211,13 @@ def run(
     """
     params.validate()
     run_id = f"bt_{uuid.uuid4().hex[:8]}"
-    all_dates = sorted(d for d in frame["quote_date"].unique())
+    store_dates = getattr(frame, "dates", None)
+    all_dates = (list(store_dates) if store_dates is not None
+                 else sorted(d for d in frame["quote_date"].unique()))
+    if date_from is not None:
+        all_dates = [d for d in all_dates if d >= date_from]
+    if date_to is not None:
+        all_dates = [d for d in all_dates if d <= date_to]
     live_dates = [d for d in all_dates if allow_sealed or d < SEALED_START]
     sealed_skipped = len(all_dates) - len(live_dates)
 
@@ -235,6 +255,7 @@ def run(
     trades: list[dict] = []
     equity_curve: list[dict] = []
     cooldown_until: dict[str, date] = {}
+    missing_chains: set = set()   # ranked candidate with no chain on file
     cum_pnl = 0.0
 
     def _sliced(ticker: str, asof: date) -> Optional[pd.DataFrame]:
@@ -258,7 +279,8 @@ def run(
             spot = data_pipeline.last_price(hist)
             if spot is None:
                 continue
-            iv = data_pipeline.recent_realized_vol(hist, window=30) or 0.30
+            iv = min(data_pipeline.recent_realized_vol(hist, window=30) or 0.30,
+                     MAX_MODEL_VOL)
             market_price = _position_mark(frame, asof, pos)
             # Data-ended settlement: price rows stopped mid-hold (delisting/
             # halt). Coasting on the frozen spot to a mild 21-DTE exit would
@@ -305,11 +327,30 @@ def run(
                                  "open": len(book), "vix_killed": True})
             continue
 
-        day_chains = data_loader.chains_for_date(
-            frame, asof, params.dte_min, params.dte_max)
-        universe = data_loader.universe_asof(
-            {t: p for t, p in prices.items() if t in day_chains},
-            asof, price_min, price_max, config.MIN_DAILY_VOLUME)
+        if candidates_by_date is not None:
+            # PRECOMPUTED RANKING PATH (study scale). The daily ranking is a
+            # pure function of stock data, so it is computed once for all
+            # config cells by precompute_candidates.py rather than re-derived
+            # here for every cell over ~10k ticker-histories per day. The
+            # ORDER is authoritative; everything downstream (chain selection,
+            # strike choice, every gate) still runs the production code.
+            # verify_ranking.py proves this path reproduces the engine's own
+            # filter+rank output on sampled days before any run is trusted.
+            universe = list(
+                candidates_by_date.get(asof.isoformat(), {}).get(
+                    params.tier, []))
+            day_chains = data_loader.chains_for_date(
+                frame, asof, params.dte_min, params.dte_max,
+                tickers=set(universe), require_two_sided=True)
+            for t in universe:
+                if t not in day_chains:
+                    missing_chains.add((asof.isoformat(), t))
+        else:
+            day_chains = data_loader.chains_for_date(
+                frame, asof, params.dte_min, params.dte_max)
+            universe = data_loader.universe_asof(
+                {t: p for t, p in prices.items() if t in day_chains},
+                asof, price_min, price_max, config.MIN_DAILY_VOLUME)
 
         contexts = []
         for ticker in universe:
@@ -340,8 +381,23 @@ def run(
                 "next_earnings_days": ned,
                 "price_history": ctx.price_history,
             })
-        ranked = ranker.rank_candidates(
-            passing, top_n=config.MAX_CANDIDATES_IN_EMAIL)
+        if candidates_by_date is not None:
+            # Preserve the precomputed order (it IS the ranker's output);
+            # rank_candidates would re-sort on a re-derived RV percentile.
+            order = {t: i for i, t in enumerate(universe)}
+            passing.sort(key=lambda c: order.get(c["ticker"], 10_000))
+            ranked = [
+                ranker.RankedCandidate(
+                    ticker=c["ticker"], last_price=float(c["last_price"]),
+                    rv_20d_annual=float("nan"), rv_percentile=float("nan"),
+                    avg_volume_20d=float(c.get("avg_volume_20d") or 0.0),
+                    next_earnings_days=c.get("next_earnings_days"),
+                    rank=i + 1)
+                for i, c in enumerate(passing[:config.MAX_CANDIDATES_IN_EMAIL])
+            ]
+        else:
+            ranked = ranker.rank_candidates(
+                passing, top_n=config.MAX_CANDIDATES_IN_EMAIL)
 
         # ---- 3. Open (same book rules as production)
         open_tickers = {p.ticker for p in book}
@@ -411,6 +467,14 @@ def run(
         "vix_gate": stamp["vix_gate"],
         "ex_div_gate": stamp["ex_div_gate"],
         "learning_ranker": stamp["learning_ranker"],
+        # Coverage honesty: ranked candidates whose chains were never pulled
+        # cannot become trades. A high rate would mean the study silently saw
+        # a thinner opportunity set than production would have.
+        "missing_chain_candidate_days": len(missing_chains),
+        "ranking_source": ("precomputed" if candidates_by_date is not None
+                           else "engine"),
+        "entry_quotes": ("two_sided_required" if candidates_by_date is not None
+                         else "production_default"),
     }
 
     result = {"run_id": run_id, "params": asdict(params), "summary": summary,
