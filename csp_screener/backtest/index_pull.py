@@ -26,7 +26,17 @@ TICKERS=["SPY","QQQ","IWM","DIA","XSP","EEM","EFA","XLF","XLE","XLU","XBI",
          "SMH","KRE","GDX","GLD","SLV","TLT","HYG","USO","UNG","FXI","EWZ",
          "ARKK","XOP","IYR","XLK","XLV","XLI","XLP","SOXX"]
 START=date(2017,1,1); END=date(2026,8,28)
-ACTIVE=70; WORKERS=4; RETRIES=[0,5,20,60]
+# 50 days covers a 45-DTE entry held to expiry, with margin.
+ACTIVE=50; WORKERS=4; RETRIES=[0,5,20,60]
+
+def is_monthly(d: date) -> bool:
+    """Third-Friday standard expiration. SPY/QQQ/IWM list ~150 expirations a
+    year once weeklies are counted, which makes a 10-year pull days long for
+    no gain: a 25-45 DTE strategy takes the expiry nearest 35 days, and the
+    monthlies are where the open interest and the tightest markets are. This
+    restriction is a declared data-coverage choice, stamped in the study —
+    it narrows WHICH expiries exist, never which trades are allowed."""
+    return d.weekday() == 4 and 15 <= d.day <= 21
 
 def _get(path, params, sym):
     for b in RETRIES:
@@ -51,7 +61,8 @@ def pull(sym):
         if len(p)>=2:
             try:
                 e=date.fromisoformat(p[1])
-                if START<=e<=END+timedelta(days=ACTIVE): exps.append(e)
+                if START<=e<=END+timedelta(days=ACTIVE) and is_monthly(e):
+                    exps.append(e)
             except ValueError: pass
     st=_get("/v3/stock/history/eod",{"symbol":sym,"start_date":START.isoformat(),
                                      "end_date":min(END,START+timedelta(days=364)).isoformat()},sym)

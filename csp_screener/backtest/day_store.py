@@ -116,8 +116,9 @@ def put_delta(S, K, T, sigma):
 # Build
 # ---------------------------------------------------------------------------
 
-def build(data_root: Path = DATA, store: Path = STORE) -> dict:
-    opt_root = data_root / "options"
+def build(data_root: Path = DATA, store: Path = STORE,
+          options_subdir: str = "options") -> dict:
+    opt_root = data_root / options_subdir
     tickers = sorted(p.name for p in opt_root.iterdir() if p.is_dir())
     store.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
@@ -127,7 +128,8 @@ def build(data_root: Path = DATA, store: Path = STORE) -> dict:
         batch = tickers[start:start + BATCH_TICKERS]
         try:
             frame, _ = data_loader.load_thetadata_full(
-                data_root, tickers=batch, compute_iv=False)
+                data_root, tickers=batch, compute_iv=False,
+                options_subdir=options_subdir)
         except FileNotFoundError:
             continue
         if frame.empty:
@@ -217,9 +219,14 @@ class DayStore:
 
 
 if __name__ == "__main__":
-    print("Building day store...")
-    s = build()
-    ds = DayStore()
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--options-subdir", default="options")
+    ap.add_argument("--store", default=str(STORE))
+    a = ap.parse_args()
+    print(f"Building day store from {a.options_subdir}...")
+    s = build(DATA, Path(a.store), options_subdir=a.options_subdir)
+    ds = DayStore(Path(a.store))
     print(f"DAY STORE BUILT: {s}")
     print(f"{len(ds.dates)} trading days "
           f"({ds.dates[0]} -> {ds.dates[-1]})" if ds.dates else "EMPTY")

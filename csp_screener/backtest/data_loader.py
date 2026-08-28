@@ -227,6 +227,7 @@ def load_thetadata_dir(data_dir) -> tuple[pd.DataFrame, dict]:
 
 def load_thetadata_full(data_root, tickers: Optional[list[str]] = None,
                         compute_iv: bool = True,
+                        options_subdir: str = "options",
                         ) -> tuple[pd.DataFrame, dict]:
     """
     FULL-STUDY loader for the options_pull_full.py layout:
@@ -240,14 +241,18 @@ def load_thetadata_full(data_root, tickers: Optional[list[str]] = None,
     tickers: optional subset (chunked study runs); default = all pulled.
     """
     data_root = Path(data_root)
-    opt_root = data_root / "options"
+    opt_root = data_root / options_subdir
     frames = []
     names = tickers or sorted(p.name for p in opt_root.iterdir() if p.is_dir())
     for ticker in names:
         tdir = opt_root / ticker
         if not tdir.is_dir():
             continue
+        # Two layouts: the single-name pull keeps a shared stocks/ dir; the
+        # index pull keeps stock_eod.csv beside each ticker's chains.
         stock_csv = data_root / "stocks" / f"{ticker}.csv"
+        if not stock_csv.exists():
+            stock_csv = tdir / "stock_eod.csv"
         if not stock_csv.exists():
             continue
         sdf = load_thetadata_stock(stock_csv)
