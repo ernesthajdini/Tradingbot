@@ -63,16 +63,21 @@ def load_earnings() -> dict[str, list[date]]:
 def ticker_daily(csv_path: Path, earnings: list[date] | None):
     """Per-ticker daily frame with the exact production metrics:
     rv percentile (ranker math), 20d avg volume, earnings-blackout flag."""
-    df = pd.read_csv(csv_path, usecols=["created", "close", "volume"])
-    if len(df) < config.RV_WINDOW_DAYS + 10:
+    # Load through the SAME loader the engine uses, so zero-close cleaning
+    # and split adjustment are identical on both sides of the verification.
+    # The ranker prices RV off "Adj Close" when present (production does the
+    # same), while the band filter uses the as-traded close.
+    from csp_screener.backtest import data_loader
+    src = data_loader.load_thetadata_stock(csv_path)
+    if len(src) < config.RV_WINDOW_DAYS + 10:
         return None
-    d = pd.to_datetime(df["created"], errors="coerce").dt.normalize()
-    close = pd.to_numeric(df["close"], errors="coerce")
-    vol = pd.to_numeric(df["volume"], errors="coerce").fillna(0.0)
-    out = pd.DataFrame({"close": close.values, "volume": vol.values},
-                       index=pd.DatetimeIndex(d)).dropna(subset=["close"])
+    out = pd.DataFrame({
+        "close": src["Close"].to_numpy(),
+        "adj": (src["Adj Close"] if "Adj Close" in src.columns
+                else src["Close"]).to_numpy(),
+        "volume": src["Volume"].to_numpy(),
+    }, index=src.index)
     out = out[~out.index.duplicated(keep="last")].sort_index()
-    out = out[out["close"] > 0]   # vendor zero-close cleaning, as the loader
     if len(out) < config.RV_WINDOW_DAYS + 10:
         return None
 
@@ -85,7 +90,7 @@ def ticker_daily(csv_path: Path, earnings: list[date] | None):
     # only. Ranking over raw row positions instead diverges whenever a
     # ticker has a gap (verified: AKAO's real denominator was 63, not 252).
     W, H = config.RV_WINDOW_DAYS, config.RV_HISTORY_DAYS
-    log_ret = np.log(out["close"] / out["close"].shift(1))
+    log_ret = np.log(out["adj"] / out["adj"].shift(1))
     rv_raw = log_ret.rolling(W).std() * np.sqrt(252)
     rvv = rv_raw.replace([np.inf, -np.inf], np.nan).dropna()
     if rvv.empty:

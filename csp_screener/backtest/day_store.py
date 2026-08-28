@@ -162,6 +162,10 @@ def build(data_root: Path = DATA, store: Path = STORE) -> dict:
                 pa.schema([("quote_date", pa.date32())]), flavor="hive"),
             basename_template=f"b{start}-{{i}}.parquet",
             existing_data_behavior="overwrite_or_ignore",
+            # One batch spans every date its tickers quote on — ~2,700
+            # partitions, well past pyarrow's default cap of 1024.
+            max_partitions=8192,
+            max_open_files=8192,
         )
         stats["tickers"] += len(batch)
         stats["rows"] += len(frame)

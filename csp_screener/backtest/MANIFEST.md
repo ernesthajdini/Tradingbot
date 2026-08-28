@@ -85,3 +85,70 @@ If the production configuration shows **negative expectancy at mid-fill
 under the pessimistic band across the exploration window**, the strategy is
 falsified: stop the 2026 paper year, do not spend further on data, report to
 the owner. That outcome is a SUCCESS of this project, not a failure.
+
+---
+
+# AMENDMENT 1 — Phase 2 exploratory search (declared 2026-08-28, BEFORE running)
+
+Phase 1 (the DTE x delta grid) is complete and its verdict is recorded in
+STUDY_VERDICT: the production configuration's central estimate is negative
+(-$6 to -$14/trade across corrected variants) but not statistically separable
+from zero, on 119 trades whose sign rests on 4-9 tail events.
+
+The owner has asked for a genuine search for a profitable configuration over
+the purchased 8 years. That is a legitimate research goal and a multiplicity
+hazard, so the search space, the splits and the correction are fixed HERE,
+before any Phase 2 run executes. Phase 1's failure mode is explicitly on the
+record as the reason: the study window was moved from 2016 to 2017 AFTER the
+data was seen, and that undeclared choice manufactured the only "significant"
+result in the whole study. It must not happen twice.
+
+## A. Declared search space (the ONLY configurations Phase 2 may test)
+
+| knob | values | count |
+|---|---|---|
+| universe | single_name, index_etf | 2 |
+| structure | csp (naked), spread (defined risk) | 2 |
+| DTE window | 25-45, 30-45 | 2 |
+| target delta | 0.30, 0.25, 0.20, 0.15 | 4 |
+| force-exit DTE | 21 (production), 7, 0 (hold to expiry) | 3 |
+| stop multiple | 2.0 (production), 3.0, none | 3 |
+
+Full grid = 2 x 2 x 2 x 4 x 3 x 3 = **288 configurations**. Not every cell is
+runnable (index_etf + csp is unaffordable at this account size and will be
+reported as skipped, not silently dropped); the multiplicity denominator is
+the number of configurations ACTUALLY RUN, counted from runs_log.jsonl.
+
+Everything else stays frozen at production values: take-profit 50%, friction
+model, sanity caps, OI and spread gates, VIX kill switch, ranker, reopen
+cooldown, position caps.
+
+## B. Time discipline (fixed now, never moved again)
+
+- **TRAIN 2017-02-08 -> 2021-12-31.** The entire search happens here. Any
+  number quoted from this period is a search result, not evidence.
+- **VALIDATE 2022-01-01 -> 2023-12-31.** Touched ONLY by configurations that
+  survive the train-stage filter below, once each.
+- **SEALED 2024-01-01 onward.** Untouched. Reserved for a single final
+  confirmation of at most ONE configuration, if anything survives validation.
+
+## C. Promotion rule (fixed now)
+
+A configuration is promoted from TRAIN to VALIDATE only if ALL hold:
+1. >= 100 closed trades on train (below that the estimate is noise);
+2. positive mean P&L at the PESSIMISTIC friction band (not the base band —
+   the optimistic band has never been the honest one);
+3. positive median trade;
+4. no single trade contributing more than 40% of total P&L.
+
+A configuration is called a FINDING only if, on VALIDATE, it keeps a positive
+pessimistic-band mean and its bootstrap 95% CI excludes zero at
+alpha = 0.05 / (configurations promoted).
+
+## D. Expected outcome, stated in advance
+
+With 288 candidates and ~5 years of train data, several configurations WILL
+look profitable on train by chance alone. That is the null hypothesis, not a
+discovery. If nothing survives validation, the honest report is "no
+configuration in the declared space demonstrated an edge" — and that is a
+complete and publishable answer, not a failure to try harder.
