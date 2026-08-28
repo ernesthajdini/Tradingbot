@@ -20,6 +20,7 @@ import hashlib
 import json
 import logging
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, asdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -63,9 +64,12 @@ DATA_ENDED_AFTER_DAYS = 7
 # cannot hide a real loss: realised P&L comes from quotes, not from sigma.
 MAX_MODEL_VOL = 3.0
 
-# MANIFEST section 1: the declared grid, as wired today.
+# MANIFEST section 1 + AMENDMENT 1: the declared search space.
 ALLOWED_DTE_WINDOWS = {(25, 45), (30, 45)}
-ALLOWED_TARGET_DELTAS = {0.20, 0.25, 0.30}
+ALLOWED_TARGET_DELTAS = {0.15, 0.20, 0.25, 0.30}
+ALLOWED_EXIT_DTE = {21, 7, 0}          # 0 = hold to expiry
+ALLOWED_STOP_MULT = {2.0, 3.0, None}   # None = no stop
+ALLOWED_UNIVERSES = {"single_name", "index_etf"}
 
 
 class ManifestViolation(Exception):
@@ -79,6 +83,11 @@ class BacktestParams:
     target_delta: float = config.TARGET_DELTA
     tier: str = "sandbox"          # 'sandbox' (CSP) | 'live' (spread)
     label: str = "production"
+    # AMENDMENT 1 knobs. Defaults reproduce production exactly, so a
+    # default-constructed run is byte-identical to Phase 1.
+    exit_dte: int = config.VIRTUAL_FORCE_EXIT_DTE
+    stop_mult: Optional[float] = config.VIRTUAL_SL_MULTIPLE
+    universe: str = "single_name"
 
     def validate(self) -> None:
         if (self.dte_min, self.dte_max) not in ALLOWED_DTE_WINDOWS:
@@ -91,6 +100,16 @@ class BacktestParams:
                 f"grid {sorted(ALLOWED_TARGET_DELTAS)} — see MANIFEST.md")
         if self.tier not in ("sandbox", "live"):
             raise ManifestViolation(f"unknown tier {self.tier!r}")
+        if self.exit_dte not in ALLOWED_EXIT_DTE:
+            raise ManifestViolation(
+                f"exit_dte {self.exit_dte} outside the declared space "
+                f"{sorted(ALLOWED_EXIT_DTE)} — see MANIFEST Amendment 1")
+        if self.stop_mult not in ALLOWED_STOP_MULT:
+            raise ManifestViolation(
+                f"stop_mult {self.stop_mult} outside the declared space "
+                f"— see MANIFEST Amendment 1")
+        if self.universe not in ALLOWED_UNIVERSES:
+            raise ManifestViolation(f"unknown universe {self.universe!r}")
 
 
 def _frozen_config_hash() -> str:
@@ -182,6 +201,25 @@ def _position_mark(
     return net if net >= 0 else None
 
 
+@contextmanager
+def _exit_rules(exit_dte: int, stop_mult):
+    """Temporarily set the exit constants virtual_tracker.evaluate_open_position
+    reads. The engine calls PRODUCTION exit code by design, so varying the
+    declared exit knobs means varying those constants for the duration of the
+    run — never a fork of the logic. Restored in a finally block."""
+    old_dte = config.VIRTUAL_FORCE_EXIT_DTE
+    old_sl = config.VIRTUAL_SL_MULTIPLE
+    try:
+        config.VIRTUAL_FORCE_EXIT_DTE = exit_dte
+        # No stop = a multiple no mark can reach (the rule is
+        # pnl <= -mult * credit; 1e9 makes it unreachable).
+        config.VIRTUAL_SL_MULTIPLE = 1e9 if stop_mult is None else stop_mult
+        yield
+    finally:
+        config.VIRTUAL_FORCE_EXIT_DTE = old_dte
+        config.VIRTUAL_SL_MULTIPLE = old_sl
+
+
 def run(
     frame: pd.DataFrame,
     prices: dict[str, pd.DataFrame],
@@ -268,7 +306,10 @@ def run(
             return None
         return out if not out.empty else None
 
-    for asof in live_dates:
+    exit_ctx = _exit_rules(params.exit_dte, params.stop_mult)
+    exit_ctx.__enter__()
+    try:
+      for asof in live_dates:
         asof_dt = datetime.combine(asof, datetime.min.time())
 
         # ---- 1. Mark & exit the open book (market mark first, model fallback)
@@ -444,6 +485,9 @@ def run(
 
         equity_curve.append({"date": asof.isoformat(),
                              "cum_pnl": round(cum_pnl, 2), "open": len(book)})
+
+    finally:
+        exit_ctx.__exit__(None, None, None)
 
     # ---- Summary (band reporting only — MANIFEST rail)
     n = len(trades)

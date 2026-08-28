@@ -152,3 +152,18 @@ look profitable on train by chance alone. That is the null hypothesis, not a
 discovery. If nothing survives validation, the honest report is "no
 configuration in the declared space demonstrated an edge" — and that is a
 complete and publishable answer, not a failure to try harder.
+
+## E. Clarification: the index_etf universe has no price band (declared with Amendment 1, before any index run)
+
+The $5-25 / $20-60 price bands exist because a CASH-SECURED PUT ties up
+strike x 100 in cash — at $1,200 of equity only cheap underlyings are
+reachable. For a DEFINED-RISK SPREAD that constraint does not exist: max
+loss is (width x 100 - credit), independent of the underlying's price. A
+$2-wide SPY spread risks the same ~$150 as a $2-wide XLF spread.
+
+So the index_etf universe applies NO price band; risk is bounded by the
+existing MAX_RISK_PER_SPREAD ceiling, which is the gate that actually
+governs affordability for spreads. Volume, OI, spread-width, earnings, VIX
+and sanity gates all remain at production values. This is a clarification of
+what "index_etf universe" means, declared before the first index run — not a
+new knob, and it does not change the 288-configuration denominator.
