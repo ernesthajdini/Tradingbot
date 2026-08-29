@@ -353,8 +353,12 @@ class TestFilterAndRankOutParams:
         def history(seed_scale):
             prices = 10.0 * np.exp(np.cumsum(
                 rng.normal(0, 0.01 * seed_scale, n)))
-            idx = pd.bdate_range(end=datetime.now().date(), periods=n)
-            return pd.Series(prices, index=idx)
+            # bdate_range(end=<a Saturday>) returns periods-1 dates, so this
+            # test failed only on weekends. Build the index first and take
+            # its true length.
+            idx = pd.bdate_range(end=pd.Timestamp(datetime.now().date()),
+                                 periods=n)
+            return pd.Series(prices[:len(idx)], index=idx)
 
         now = datetime.now()
         contexts = [

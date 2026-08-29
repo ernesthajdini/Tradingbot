@@ -70,6 +70,9 @@ ALLOWED_TARGET_DELTAS = {0.15, 0.20, 0.25, 0.30}
 ALLOWED_EXIT_DTE = {21, 7, 0}          # 0 = hold to expiry
 ALLOWED_STOP_MULT = {2.0, 3.0, None}   # None = no stop
 ALLOWED_UNIVERSES = {"single_name", "index_etf"}
+# AMENDMENT 2: (spread width, max risk per spread) account-scale levels,
+# read off the measured median risk per width / the playbook's 5% rule.
+ALLOWED_SCALES = {(2.0, 130.0), (5.0, 400.0), (10.0, 800.0)}
 
 
 class ManifestViolation(Exception):
@@ -88,6 +91,7 @@ class BacktestParams:
     exit_dte: int = config.VIRTUAL_FORCE_EXIT_DTE
     stop_mult: Optional[float] = config.VIRTUAL_SL_MULTIPLE
     universe: str = "single_name"
+    scale: tuple = (config.SPREAD_WIDTH_WIDE, config.MAX_RISK_PER_SPREAD)
 
     def validate(self) -> None:
         if (self.dte_min, self.dte_max) not in ALLOWED_DTE_WINDOWS:
@@ -110,6 +114,10 @@ class BacktestParams:
                 f"— see MANIFEST Amendment 1")
         if self.universe not in ALLOWED_UNIVERSES:
             raise ManifestViolation(f"unknown universe {self.universe!r}")
+        if tuple(self.scale) not in ALLOWED_SCALES:
+            raise ManifestViolation(
+                f"scale {self.scale} outside the declared space "
+                f"{sorted(ALLOWED_SCALES)} — see MANIFEST Amendment 2")
 
 
 def _frozen_config_hash() -> str:
@@ -202,14 +210,23 @@ def _position_mark(
 
 
 @contextmanager
-def _exit_rules(exit_dte: int, stop_mult):
+def _exit_rules(exit_dte: int, stop_mult, scale=None):
     """Temporarily set the exit constants virtual_tracker.evaluate_open_position
     reads. The engine calls PRODUCTION exit code by design, so varying the
     declared exit knobs means varying those constants for the duration of the
     run — never a fork of the logic. Restored in a finally block."""
     old_dte = config.VIRTUAL_FORCE_EXIT_DTE
     old_sl = config.VIRTUAL_SL_MULTIPLE
+    old_w, old_wn, old_risk = (config.SPREAD_WIDTH_WIDE,
+                               config.SPREAD_WIDTH_NARROW,
+                               config.MAX_RISK_PER_SPREAD)
     try:
+        if scale is not None:
+            # Account-scale knob (Amendment 2): both widths are set to the
+            # declared width so the generator's spot-based preference cannot
+            # silently fall back to a narrower one.
+            config.SPREAD_WIDTH_WIDE = config.SPREAD_WIDTH_NARROW = scale[0]
+            config.MAX_RISK_PER_SPREAD = scale[1]
         config.VIRTUAL_FORCE_EXIT_DTE = exit_dte
         # No stop = a multiple no mark can reach (the rule is
         # pnl <= -mult * credit; 1e9 makes it unreachable).
@@ -218,6 +235,8 @@ def _exit_rules(exit_dte: int, stop_mult):
     finally:
         config.VIRTUAL_FORCE_EXIT_DTE = old_dte
         config.VIRTUAL_SL_MULTIPLE = old_sl
+        config.SPREAD_WIDTH_WIDE, config.SPREAD_WIDTH_NARROW = old_w, old_wn
+        config.MAX_RISK_PER_SPREAD = old_risk
 
 
 def run(
@@ -306,7 +325,7 @@ def run(
             return None
         return out if not out.empty else None
 
-    exit_ctx = _exit_rules(params.exit_dte, params.stop_mult)
+    exit_ctx = _exit_rules(params.exit_dte, params.stop_mult, params.scale)
     exit_ctx.__enter__()
     try:
       for asof in live_dates:

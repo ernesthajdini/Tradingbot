@@ -167,3 +167,50 @@ governs affordability for spreads. Volume, OI, spread-width, earnings, VIX
 and sanity gates all remain at production values. This is a clarification of
 what "index_etf universe" means, declared before the first index run — not a
 new knob, and it does not change the 288-configuration denominator.
+
+---
+
+# AMENDMENT 2 — the capital-scale test (declared 2026-08-29, BEFORE running)
+
+Phase 2's index leg returned 7-9 trades in five years. The funnel says why,
+and it is not a market fact: measured on 395 real index spread quotes
+(2018-2021), $1-2 wide spreads fit MAX_RISK_PER_SPREAD=$130 but net $7-16 at
+their own take-profit against a $25 floor, while $5-10 wides net $39-70 —
+clearing the floor 100% of the time — and breach the $130 cap 100% of the
+time. At $1,200 of equity NO width satisfies both gates. The index leg was
+therefore never a test of the strategy; it was a test of the account size.
+
+That makes one question worth asking, and it is a capital question, not a
+strategy search: **does index premium selling have an edge once the account
+is large enough to trade it?** Declared here before running.
+
+## A. Declared space (24 configurations)
+
+Fixed: universe=index_etf, structure=spread, DTE window 25-45 (production).
+
+| knob | values |
+|---|---|
+| account scale (spread width, max risk per spread) | ($2,$130) = today's $1.2K account; ($5,$400) ~ $8K account; ($10,$800) ~ $16K account |
+| target delta | 0.30, 0.20 |
+| force-exit DTE | 21, 7 |
+| stop multiple | 2.0, none |
+
+3 x 2 x 2 x 2 = **24 configurations.** The scale levels come from the
+measured median risk per width divided by the playbook's own 5%-per-trade
+rule — they are not tuned, they are read off the table above.
+
+## B. Discipline (unchanged from Amendment 1)
+
+TRAIN 2017-02-08..2021-12-31. VALIDATE 2022..2023, entered only by
+configurations passing the SAME promotion rule (>=100 train trades, positive
+pessimistic mean, positive median, no trade >40% of P&L). SEALED 2024+
+untouched. alpha = 0.05 / promoted. Every run counts in runs_log.jsonl.
+
+## C. What this test can and cannot say
+
+It CAN say whether the index/spread structure shows an edge at a workable
+size. It CANNOT authorise trading at $1,200 — the account still cannot hold
+a $400-risk position under the 5% rule, and nothing here changes the
+go-live gate. A positive result is a REASON TO KEEP DEPOSITING toward a
+size where the strategy is mechanically possible; a negative result retires
+premium selling as this account's destination regardless of size.
