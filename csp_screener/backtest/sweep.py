@@ -14,6 +14,7 @@ from datetime import date, datetime
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 import numpy as np
+from csp_screener import config
 from csp_screener.backtest import data_loader, engine
 from csp_screener.backtest.day_store import DayStore
 
@@ -24,6 +25,10 @@ DTES = [(25, 45), (30, 45)]
 DELTAS = [0.30, 0.25, 0.20, 0.15]
 EXITS = [21, 7, 0]
 STOPS = [2.0, 3.0, None]
+# AMENDMENT 2 (--scale-test): fixed 25-45 DTE, 2 deltas, 2 exits, 2 stops,
+# across 3 account-scale levels = 24 configurations.
+SCALES = [(2.0, 130.0), (5.0, 400.0), (10.0, 800.0)]
+SCALE_DELTAS, SCALE_EXITS, SCALE_STOPS = [0.30, 0.20], [21, 7], [2.0, None]
 # universe x structure -> production tier (index+csp is declared SKIPPED)
 COMBOS = {("single_name", "csp"): "sandbox", ("single_name", "spread"): "live",
           ("index_etf", "spread"): "live"}
@@ -67,6 +72,7 @@ def boot_ci(trades, basis="pnl_pessimistic", iters=10000, seed=7):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--universe", default="single_name")
+    ap.add_argument("--scale-test", action="store_true")
     args = ap.parse_args()
     uni = args.universe
 
@@ -80,23 +86,31 @@ def main() -> int:
     print(f"{uni}: {len(store.dates)} days, {len(prices)} price frames", flush=True)
 
     structures = [s for (u, s) in COMBOS if u == uni]
-    space = [(st, d, dl, ex, sp) for st in structures for d in DTES
-             for dl in DELTAS for ex in EXITS for sp in STOPS]
+    if args.scale_test:
+        space = [("spread", (25, 45), dl, ex, sp, sc) for sc in SCALES
+                 for dl in SCALE_DELTAS for ex in SCALE_EXITS
+                 for sp in SCALE_STOPS]
+    else:
+        space = [(st, d, dl, ex, sp, (config.SPREAD_WIDTH_WIDE,
+                                      config.MAX_RISK_PER_SPREAD))
+                 for st in structures for d in DTES
+                 for dl in DELTAS for ex in EXITS for sp in STOPS]
     print(f"declared space for {uni}: {len(space)} configurations\n", flush=True)
 
     results, t0 = [], time.time()
-    for i, (st, dte, dl, ex, sp) in enumerate(space, 1):
-        label = f"{uni}/{st} dte{dte[0]}-{dte[1]} d{dl:.2f} exit{ex} stop{sp}"
+    for i, (st, dte, dl, ex, sp, sc) in enumerate(space, 1):
+        label = (f"{uni}/{st} w${sc[0]:.0f} risk${sc[1]:.0f} d{dl:.2f} "
+                 f"exit{ex} stop{sp}")
         p = engine.BacktestParams(dte_min=dte[0], dte_max=dte[1], target_delta=dl,
                                   tier=COMBOS[(uni, st)], exit_dte=ex, stop_mult=sp,
-                                  universe=uni, label=label)
+                                  universe=uni, scale=sc, label=label)
         r = engine.run(store, prices, p, source_meta=meta, earnings_lookup=el,
                        vix_lookup=vl, candidates_by_date=cand,
                        date_from=TRAIN[0], date_to=TRAIN[1], write_results=False)
         s = stats(r["trades"])
         row = {"label": label, "universe": uni, "structure": st,
                "dte": f"{dte[0]}-{dte[1]}", "delta": dl, "exit_dte": ex,
-               "stop": sp, "train": s, "trades": r["trades"]}
+               "stop": sp, "scale": list(sc), "train": s, "trades": r["trades"]}
         results.append(row)
         if i % 12 == 0 or i == len(space):
             print(f"  {i}/{len(space)} ({(time.time()-t0)/60:.0f}min)", flush=True)
@@ -113,6 +127,8 @@ def main() -> int:
             dte_min=int(r["dte"].split("-")[0]), dte_max=int(r["dte"].split("-")[1]),
             target_delta=r["delta"], tier=COMBOS[(uni, r["structure"])],
             exit_dte=r["exit_dte"], stop_mult=r["stop"], universe=uni,
+            scale=tuple(r.get("scale", (config.SPREAD_WIDTH_WIDE,
+                                        config.MAX_RISK_PER_SPREAD))),
             label="VALIDATE " + r["label"])
         v = engine.run(store, prices, p, source_meta=meta, earnings_lookup=el,
                        vix_lookup=vl, candidates_by_date=cand,
@@ -127,7 +143,7 @@ def main() -> int:
            "space_size": len(space), "train": [d.isoformat() for d in TRAIN],
            "validate": [d.isoformat() for d in VALID], "alpha": alpha_note,
            "configs": [{k: v for k, v in r.items() if k != "trades"} for r in results]}
-    (DATA / f"sweep_{uni}.json").write_text(json.dumps(out, indent=1, default=str),
+    (DATA / f"sweep_{uni}{'_scale' if args.scale_test else ''}.json").write_text(json.dumps(out, indent=1, default=str),
                                             encoding="utf-8")
 
     print(f"\n=== TOP 12 BY TRAIN (search results, NOT evidence) ===")
