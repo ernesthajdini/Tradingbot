@@ -20,8 +20,10 @@ from datetime import date, timedelta
 from pathlib import Path
 import requests
 
+RIGHT = "call" if "--calls" in sys.argv else "put"
 BASE="http://127.0.0.1:25503"
 OUT=Path(__file__).resolve().parent/"data"/"thetadata_full"/"options_index"
+KIND = "calls" if RIGHT == "call" else "puts"
 TICKERS=["SPY","QQQ","IWM","DIA","XSP","EEM","EFA","XLF","XLE","XLU","XBI",
          "SMH","KRE","GDX","GLD","SLV","TLT","HYG","USO","UNG","FXI","EWZ",
          "ARKK","XOP","IYR","XLK","XLV","XLI","XLP","SOXX"]
@@ -52,7 +54,7 @@ def _get(path, params, sym):
 
 def pull(sym):
     d=OUT/sym; d.mkdir(parents=True, exist_ok=True)
-    c={"puts":0,"oi":0,"skip":0,"empty":0,"fail":0}
+    c={KIND:0,"oi":0,"oi_calls":0,"skip":0,"empty":0,"fail":0}
     txt=_get("/v3/option/list/expirations",{"symbol":sym},sym)
     if not txt: return c
     exps=[]
@@ -78,11 +80,12 @@ def pull(sym):
     for e in sorted(set(exps)):
         lo=max(e-timedelta(days=ACTIVE),START); hi=min(e,END)
         if lo>hi: continue
-        for kind,path in (("puts","/v3/option/history/eod"),
-                          ("oi","/v3/option/history/open_interest")):
+        for kind,path in ((KIND,"/v3/option/history/eod"),
+                          ("oi_"+KIND if RIGHT=="call" else "oi",
+                           "/v3/option/history/open_interest")):
             f=d/f"{kind}_{e.isoformat()}.csv"
             if f.exists(): c["skip"]+=1; continue
-            t=_get(path,{"symbol":sym,"expiration":e.isoformat(),"right":"put",
+            t=_get(path,{"symbol":sym,"expiration":e.isoformat(),"right":RIGHT,
                          "start_date":lo.isoformat(),"end_date":hi.isoformat()},sym)
             if t is None: c["fail"]+=1
             elif t and len(t.splitlines())>1: f.write_text(t,encoding="utf-8"); c[kind]+=1
@@ -92,14 +95,15 @@ def pull(sym):
 def main():
     OUT.mkdir(parents=True,exist_ok=True)
     log=open(OUT.parent/"index_pull.log","a",encoding="utf-8",buffering=1)
-    print(f"{len(TICKERS)} index/ETF tickers",file=log)
-    tot={"puts":0,"oi":0,"skip":0,"empty":0,"fail":0}; t0=time.time(); done=0
+    print(f"{len(TICKERS)} index/ETF tickers, right={RIGHT}",file=log)
+    tot={KIND:0,"oi":0,"oi_calls":0,"skip":0,"empty":0,"fail":0}; t0=time.time(); done=0
     with ThreadPoolExecutor(WORKERS) as ex:
         fs={ex.submit(pull,s):s for s in TICKERS}
         for fu in as_completed(fs):
             c=fu.result(); done+=1
             for k in tot: tot[k]+=c.get(k,0)
             print(f"{done}/{len(TICKERS)} {fs[fu]} ({(time.time()-t0)/3600:.1f}h) {tot}",file=log)
-    print(f"INDEX PULL DONE {tot}",file=log); print("INDEX PULL DONE")
+    print(f"INDEX {RIGHT.upper()} PULL DONE {tot}",file=log)
+    print(f"INDEX {RIGHT.upper()} PULL DONE")
     return 0
 if __name__=="__main__": sys.exit(main())

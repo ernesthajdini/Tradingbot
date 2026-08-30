@@ -214,3 +214,67 @@ a $400-risk position under the 5% rule, and nothing here changes the
 go-live gate. A positive result is a REASON TO KEEP DEPOSITING toward a
 size where the strategy is mechanically possible; a negative result retires
 premium selling as this account's destination regardless of size.
+
+---
+
+# AMENDMENT 3 — equity signal study (declared 2026-08-30, BEFORE running)
+
+Options remain the destination. This leg exists because the options studies
+kept failing on the SAME two mechanisms, and both are testable on stocks
+without buying anything: (1) friction — $1/contract x 4 legs is ruinous on
+$50-100 credits, while a stock round trip is ~$2 total; (2) SELECTION — the
+screener ranks candidates by realized-vol percentile, and the 8-year study
+gives no evidence that ranking picks winners. A signal that genuinely sorts
+future returns is the missing input to any options strategy: selling puts on
+names a validated signal likes strictly dominates selling puts on names
+sorted by RV percentile. So this leg answers the owner's second criterion —
+"are the signals correct?" — and feeds the first.
+
+## A. Declared space (16 configurations)
+
+Universe: the optionable US equities already downloaded (10,621 histories,
+delisted names included), filtered as-of-date by production's own liquidity
+floor: price >= $5 and 20-day average volume >= 1,000,000. Long only —
+shorting is not fundable at this account size.
+
+| knob | values |
+|---|---|
+| signal | 12-1 momentum; 1-month reversal; 200-day trend; 20-day low-volatility |
+| holding period | 21 or 63 trading days |
+| portfolio size | 5 or 10 equal-weight names |
+
+4 x 2 x 2 = **16 configurations.** Rebalanced at each holding-period
+boundary. Positions are exited at the last available price when a name stops
+trading; that count is reported, never hidden.
+
+Friction, charged on every entry and exit, in the same [base, pessimistic]
+band convention the options studies use: $1.00 commission per trade plus
+0.10% (base) / 0.25% (pessimistic) slippage of notional.
+
+## B. Discipline (identical to Amendments 1-2)
+
+TRAIN 2017-02-08..2021-12-31; VALIDATE 2022..2023 entered only by
+configurations that pass the promotion rule; SEALED 2024+ untouched.
+alpha = 0.05 / promoted.
+
+## C. Promotion rule (fixed now, adapted to a portfolio strategy)
+
+Promoted only if ALL hold on train:
+1. >= 100 closed positions;
+2. positive total return at the PESSIMISTIC friction band;
+3. beats SPY buy-and-hold over the same window at the pessimistic band;
+4. max drawdown <= 1.5x SPY's over the same window.
+
+A FINDING requires, on VALIDATE: still positive at pessimistic fills, still
+beating SPY, and a bootstrap 95% CI on mean per-position return excluding
+zero at the corrected alpha.
+
+## D. Stated in advance
+
+Cross-sectional equity factors are the most data-mined subject in finance;
+that they look good on a training window is the null hypothesis. The
+economics are also hostile at this size: 5 positions of ~$240 paying ~$2
+round trip is ~0.8% per rebalance, so a 21-day holding period concedes
+roughly 10%/yr to friction before any signal is asked to work. If nothing
+survives, the honest result is "no declared signal beats holding an index
+fund at this account size", which is itself decision-relevant.
