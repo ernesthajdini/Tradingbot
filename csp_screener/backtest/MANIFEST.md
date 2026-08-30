@@ -328,3 +328,64 @@ Unchanged: TRAIN 2017-02-08..2021-12-31, VALIDATE 2022-2023 on promotion
 >40% of P&L), SEALED 2024+ untouched, alpha = 0.05/promoted. Trade counts
 are reported for every arm whether or not it promotes, so an untestable
 hypothesis is visibly untestable rather than silently absent.
+
+---
+
+# AMENDMENT 5 — call structures and iron condors (declared 2026-08-30, BEFORE the data finished downloading)
+
+Every study so far sold PUTS only, because puts were the only side ever
+downloaded. Calls are pulling now, which opens the last major untested
+branch — and one structure in it has a genuine arithmetic argument rather
+than a hopeful one.
+
+**Why the iron condor is the interesting case.** Measured on the real index
+quotes (Amendment 2 evidence table), a $5-wide put spread pays ~$102 credit
+against ~$398 risk. Adding a call spread on the same expiry collects a
+SECOND credit while the max loss stays one-sided — only one wing can finish
+in the money — so credit roughly doubles against roughly unchanged risk.
+Friction also doubles (4 legs instead of 2, so ~$8 round trip instead of
+~$4), but it doubles against a doubled credit, whereas every failure so far
+came from friction eating a credit that could not grow. This is the first
+structure whose economics differ in KIND from what has already failed.
+
+## A. Declared space (12 configurations)
+
+Universe: index_etf (calls were pulled for the 30 ETFs only).
+Fixed at production: 25-45 DTE, 21-DTE force exit, 2x stop, all liquidity,
+OI, spread-width, sanity and friction gates.
+
+| knob | values |
+|---|---|
+| structure | put_spread (baseline, already measured) ; call_spread ; iron_condor |
+| account scale (width, max risk) | ($5,$400) ; ($10,$800) |
+| short-leg delta per side | 0.30 ; 0.20 |
+
+3 x 2 x 2 = **12 configurations.**
+
+## B. HONESTY COST, declared before running
+
+Production's setup_generator builds PUT structures only. Call spreads and
+condors therefore require NEW backtest-only code, so this leg does NOT have
+the "replays the real production gates" property that Amendments 1-4 had.
+The new generator mirrors the production gates deliberately — same friction
+model, same net-credit-at-designed-exit floor, same OI and spread-width
+gates, same never-sell-ITM rule applied to both wings, same sanity caps, same
+exit rules — but it is a mirror, not the original. Every result from this leg
+is stamped `generator: backtest_mirror`. If a condor configuration ever
+survives validation, porting it to production is a REWRITE, and the live
+system would need its own verification before trading it.
+
+## C. Discipline
+
+Unchanged: TRAIN 2017-02-08..2021-12-31; VALIDATE 2022-2023 on promotion
+(>=100 train trades, positive pessimistic mean, positive median, no trade
+>40% of P&L); SEALED 2024+ untouched; alpha = 0.05/promoted.
+
+## D. Stated in advance
+
+The put leg at these scales produced 27-66 trades over five years. A condor
+needs BOTH wings to pass every gate on the same expiry, so its trade count
+can only be LOWER than the put leg's, not higher. The most likely outcome is
+therefore another under-powered sample — and if so, the finding is that the
+structure is unreachable at this frequency, not that it was tested and
+failed.
