@@ -415,6 +415,26 @@ def step_open_virtual_positions(
         # month's balance happens to be. What the account could actually have
         # carried is recorded alongside (portfolio_fit), so the account-level
         # scoreboard stays answerable too.
+        # NO BIDDER, NO FILL. _pick_best_put deliberately tolerates
+        # bid=ask=0 and anchors the premium to lastPrice — that leniency
+        # exists so the SUNDAY digest can still show planning candidates
+        # when the market is shut and yfinance zeroes every quote. It was
+        # never meant to price a trade. Opening a paper position on it
+        # records a credit nobody was bidding, and the 8-year study
+        # measured the damage: 61% of replayed entries were zero-bid
+        # contracts with a $5 median credit, and they carried ~80% of the
+        # loss. A setup with no two-sided quote is still generated, still
+        # displayed, still counted in the near-miss ledger — it just does
+        # not become a tracked trade. (The live tier already required a
+        # two-sided quote; only the sandbox degraded.)
+        if not (float(setup_dict.get("bid") or 0) > 0
+                and float(setup_dict.get("ask") or 0) > 0):
+            logger.info(
+                f"Not opening {setup_dict['ticker']}: no two-sided quote "
+                f"(bid {setup_dict.get('bid')}, ask {setup_dict.get('ask')}) "
+                f"— premium is anchored to a last trade, not a fillable "
+                f"price. Shown as a candidate, not tracked as a trade.")
+            continue
         risk = float(setup_dict.get("max_loss_per_contract") or 0)
         is_live = (setup_dict.get("tier") or "sandbox") == "live"
         portfolio_fit = True

@@ -1,10 +1,20 @@
+# ============================================================================
+# PAUSED 2026-08-29 (owner decision). The 8-year study across 240 declared
+# configurations found no edge in this strategy family, so the 200-trade
+# go-live gate these runs were feeding no longer has a decision to serve.
+# See csp_screener/backtest/STUDY_VERDICT.md.
+#
+# Nothing is deleted: workflow_dispatch still runs the full pipeline on
+# demand, and un-commenting the schedule block below restores the crons
+# exactly as they were.
+# ============================================================================
 name: CSP Screener — Sunday weekly run
 
 on:
-  schedule:
-    # 22:00 UTC on Sunday = 18:00 ET (when DST is on; 17:00 EST otherwise).
-    # Run an hour early to ensure the weekly email arrives before users wake up Monday.
-    - cron: '0 22 * * 0'
+  # schedule:
+  # # 22:00 UTC on Sunday = 18:00 ET (when DST is on; 17:00 EST otherwise).
+  # # Run an hour early to ensure the weekly email arrives before users wake up Monday.
+  # - cron: '0 22 * * 0'
   workflow_dispatch:  # also runnable manually
 
 jobs:

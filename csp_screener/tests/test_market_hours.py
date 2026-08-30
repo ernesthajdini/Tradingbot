@@ -476,3 +476,40 @@ def test_ticket_alert_renders_with_best_pick():
     assert "TAKE" not in subject
     assert "BEST PICK" in html
     assert "RISK BUDGET" in html
+
+
+# ---------------------------------------------------------------------------
+# Zero-bid entries (found by the 8-year study): the stale-quote allowance is
+# for DISPLAY when the market is shut, never for pricing a tracked trade.
+# ---------------------------------------------------------------------------
+
+def _setup_dict(bid, ask, ticker="ZQB"):
+    return {
+        "ticker": ticker, "spot_at_screen": 10.0,
+        "expiration": EXP.date().isoformat(), "dte": 35, "strike": 8.0,
+        "pct_otm": 0.2, "delta": -0.25, "iv": 0.6,
+        "bid": bid, "ask": ask, "mid": (bid + ask) / 2 if bid and ask else 0.05,
+        "bid_ask_pct": 0.04, "open_interest": 900, "volume": 50,
+        "estimated_credit_per_contract": 45.0,
+        "max_loss_per_contract": 755.0, "breakeven": 7.55,
+        "data_quality": "test", "reasoning": [], "structure": "csp",
+        "long_strike": None, "tier": "sandbox",
+        "net_credit_after_friction": None, "friction_estimate": None,
+        "ticket": None, "affordable_contracts": 1, "fits_account": True,
+        "pct_of_equity": 0.6, "sizing_note": "", "net_at_designed_exit": 20.0,
+    }
+
+
+def test_zero_bid_setup_is_not_opened_as_a_trade():
+    from csp_screener.main import step_open_virtual_positions
+    opened = step_open_virtual_positions(
+        [{"setup": _setup_dict(0.0, 0.10)}], "scr_zb")
+    assert opened == []
+    assert journal.read_filtered("virtual_trades", event="open") == []
+
+
+def test_two_sided_setup_still_opens():
+    from csp_screener.main import step_open_virtual_positions
+    opened = step_open_virtual_positions(
+        [{"setup": _setup_dict(0.40, 0.50)}], "scr_ok")
+    assert len(opened) == 1

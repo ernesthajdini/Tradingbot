@@ -1,17 +1,27 @@
+# ============================================================================
+# PAUSED 2026-08-29 (owner decision). The 8-year study across 240 declared
+# configurations found no edge in this strategy family, so the 200-trade
+# go-live gate these runs were feeding no longer has a decision to serve.
+# See csp_screener/backtest/STUDY_VERDICT.md.
+#
+# Nothing is deleted: workflow_dispatch still runs the full pipeline on
+# demand, and un-commenting the schedule block below restores the crons
+# exactly as they were.
+# ============================================================================
 name: CSP Screener — daily virtual position update
 
 on:
-  schedule:
-    # Hourly during US market hours, Mon-Fri:
-    # 14:35–20:35 UTC ≈ 10:35 ET through 16:35 ET (covers open to close).
-    # Public repo = free unlimited Actions minutes, so hourly costs nothing.
-    - cron: '35 14-20 * * 1-5'
-    # THE acting run: full screen DURING market hours (15:05 UTC ≈ 11:05 ET
-    # summer), when real two-sided quotes exist — the live tier structurally
-    # cannot stage tickets from after-close data (bid/ask are zeroed).
-    - cron: '5 15 * * 1-5'
-    # Final end-of-day pass after close (marks only — no screen)
-    - cron: '30 21 * * 1-5'
+  # schedule:
+  # # Hourly during US market hours, Mon-Fri:
+  # # 14:35–20:35 UTC ≈ 10:35 ET through 16:35 ET (covers open to close).
+  # # Public repo = free unlimited Actions minutes, so hourly costs nothing.
+  # - cron: '35 14-20 * * 1-5'
+  # # THE acting run: full screen DURING market hours (15:05 UTC ≈ 11:05 ET
+  # # summer), when real two-sided quotes exist — the live tier structurally
+  # # cannot stage tickets from after-close data (bid/ask are zeroed).
+  # - cron: '5 15 * * 1-5'
+  # # Final end-of-day pass after close (marks only — no screen)
+  # - cron: '30 21 * * 1-5'
   workflow_dispatch:
 
 jobs:
