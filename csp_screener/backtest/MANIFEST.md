@@ -278,3 +278,53 @@ round trip is ~0.8% per rebalance, so a 21-day holding period concedes
 roughly 10%/yr to friction before any signal is asked to work. If nothing
 survives, the honest result is "no declared signal beats holding an index
 fund at this account size", which is itself decision-relevant.
+
+---
+
+# AMENDMENT 4 — regime-conditional premium selling (declared 2026-08-30, BEFORE running)
+
+The playbook calls the post-spike window "historically the richest
+premium-selling regime a patient 1-lot trader can access", and no study has
+ever tested it: the VIX kill switch blocks entries above 35, so the 2020
+crash contributes ZERO trades to every result so far. This leg tests whether
+WHEN you sell matters, holding everything else at production values.
+
+## A. Declared space (10 configurations)
+
+Fixed at production: 25-45 DTE, 0.30 delta, 21-DTE force exit, 2x stop.
+Only the entry regime varies.
+
+| knob | values |
+|---|---|
+| universe / structure | single_name/csp ; index_etf/spread at the $5-wide, $400-risk scale |
+| entry regime | none (baseline) ; post_spike (playbook: VIX>35 within 10 sessions, now <30) ; vix_above_25 ; vix_top_quartile (trailing year) ; vix_falling (below its 10-day average) |
+
+2 x 5 = **10 configurations.**
+
+## B. POWER LIMIT, measured before running and stated as a caveat
+
+Qualifying sessions, 2017-02-08..2023-12-31 (1,735 sessions):
+
+| regime | sessions | share | per year |
+|---|---|---|---|
+| none | 1,735 | 100% | 252 |
+| post_spike (playbook) | 46 | 2.7% | 7 |
+| vix_above_25 | 325 | 18.7% | 47 |
+| vix_top_quartile | 399 | 23.0% | 58 |
+| vix_falling | 982 | 56.6% | 143 |
+
+The baseline strategies make 13-17 trades a YEAR with every session
+available. Restricting to 2.7% of sessions therefore cannot produce a
+testable sample: **the playbook's post_spike hypothesis is expected to be
+UNTESTABLE at this trade frequency, and that is a legitimate result** — a
+regime that rare cannot carry an account regardless of its edge. The
+vix_above_25 and vix_top_quartile arms will be thin (~3 trades/yr expected);
+only vix_falling should approach a usable sample.
+
+## C. Discipline
+
+Unchanged: TRAIN 2017-02-08..2021-12-31, VALIDATE 2022-2023 on promotion
+(>=100 train trades, positive pessimistic mean, positive median, no trade
+>40% of P&L), SEALED 2024+ untouched, alpha = 0.05/promoted. Trade counts
+are reported for every arm whether or not it promotes, so an untestable
+hypothesis is visibly untestable rather than silently absent.

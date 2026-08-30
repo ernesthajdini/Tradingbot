@@ -73,6 +73,9 @@ ALLOWED_UNIVERSES = {"single_name", "index_etf"}
 # AMENDMENT 2: (spread width, max risk per spread) account-scale levels,
 # read off the measured median risk per width / the playbook's 5% rule.
 ALLOWED_SCALES = {(2.0, 130.0), (5.0, 400.0), (10.0, 800.0)}
+# AMENDMENT 4: entry-regime filters (entries only; exits always run).
+ALLOWED_REGIMES = {"none", "post_spike", "vix_above_25",
+                   "vix_top_quartile", "vix_falling"}
 
 
 class ManifestViolation(Exception):
@@ -92,6 +95,7 @@ class BacktestParams:
     stop_mult: Optional[float] = config.VIRTUAL_SL_MULTIPLE
     universe: str = "single_name"
     scale: tuple = (config.SPREAD_WIDTH_WIDE, config.MAX_RISK_PER_SPREAD)
+    regime: str = "none"
 
     def validate(self) -> None:
         if (self.dte_min, self.dte_max) not in ALLOWED_DTE_WINDOWS:
@@ -114,6 +118,10 @@ class BacktestParams:
                 f"— see MANIFEST Amendment 1")
         if self.universe not in ALLOWED_UNIVERSES:
             raise ManifestViolation(f"unknown universe {self.universe!r}")
+        if self.regime not in ALLOWED_REGIMES:
+            raise ManifestViolation(
+                f"regime {self.regime!r} outside the declared space "
+                f"{sorted(ALLOWED_REGIMES)} — see MANIFEST Amendment 4")
         if tuple(self.scale) not in ALLOWED_SCALES:
             raise ManifestViolation(
                 f"scale {self.scale} outside the declared space "
@@ -249,6 +257,7 @@ def run(
     allow_sealed: bool = False,
     write_results: bool = True,
     candidates_by_date: Optional[dict] = None,
+    regime_lookup: Optional[Callable[[date], bool]] = None,
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
 ) -> dict:
@@ -385,6 +394,16 @@ def run(
             equity_curve.append({"date": asof.isoformat(),
                                  "cum_pnl": round(cum_pnl, 2),
                                  "open": len(book), "vix_killed": True})
+            continue
+
+        # AMENDMENT 4: entry-regime gate. ENTRIES ONLY — marks and exits
+        # above always run, or an open position would be stranded whenever
+        # the regime turned off.
+        if (params.regime != "none" and regime_lookup is not None
+                and not regime_lookup(asof)):
+            equity_curve.append({"date": asof.isoformat(),
+                                 "cum_pnl": round(cum_pnl, 2),
+                                 "open": len(book), "regime_blocked": True})
             continue
 
         if candidates_by_date is not None:
@@ -534,6 +553,7 @@ def run(
         # cannot become trades. A high rate would mean the study silently saw
         # a thinner opportunity set than production would have.
         "missing_chain_candidate_days": len(missing_chains),
+        "regime": params.regime,
         "ranking_source": ("precomputed" if candidates_by_date is not None
                            else "engine"),
         "entry_quotes": ("two_sided_required" if candidates_by_date is not None
