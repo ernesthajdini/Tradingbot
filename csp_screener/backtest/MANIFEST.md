@@ -663,3 +663,55 @@ both are declared here before the full run, in the same commit as the code.
 The 2018 smoke test also showed the CONTROL arm beating the signal arm.
 That is recorded here, in advance, as the direction to expect. If the full
 train window repeats it, the hypothesis is dead and will be reported dead.
+
+---
+
+# AMENDMENT 10 — unusual put volume (declared 2026-08-31, BEFORE Amendment 9's result was read)
+
+Declared while Amendment 9 was still executing, so nothing here is chosen in
+response to what 9 returned. That timing is the point.
+
+## Why this is not another variation
+
+Every one of the 306 configurations so far derived its signal from PRICE —
+the stock's own chart. This one derives it from the OPTIONS MARKET itself:
+`volume` and `open_interest`, two columns no prior study has read. A contract
+trading three times its own open interest in a day is somebody taking a
+position, and that is information which does not exist anywhere in the stock
+data. It is the most literal reading of "option signals" available.
+
+Measured before declaring: the volume/OI ratio has a genuine fat tail
+(median 0.02, p99 between 2 and 6, max ~20), so the signal is present in the
+data rather than hypothetical.
+
+## A. Declared space (18 configurations)
+
+| knob | values |
+|---|---|
+| trigger | contract_vol_3x (a put trading >= 3x its own OI) ; ticker_vol_3x (a name's total put volume >= 3x its trailing 20-day mean) ; none (CONTROL) |
+| put delta | 0.30 ; 0.40 |
+| exit | 21 DTE ; +100% take-profit else 21 DTE ; hold to expiry |
+
+The instrument is IDENTICAL across all three arms — same delta target, same
+20-60 DTE window, same liquidity gates. Only the entry TRIGGER differs, so
+any difference is the signal and not the contract.
+
+**Entry is the NEXT trading day, never the signal day.** Volume is a
+full-session quantity; filling on the same session's close would be acting on
+information that is not complete until after that close.
+
+## B. Discipline
+
+Splits, alpha, and the promotion rule are Amendment 9's, unchanged: TRAIN
+2017-02-08..2021-12-31, VALIDATE 2022-2023 on promotion, SEALED 2024+ shut.
+Promotion needs n >= 100, positive mean at the PESSIMISTIC band, positive
+median, no trade above 40% of P&L, and beating its own matched control.
+
+## C. Stated in advance
+
+A long option still pays the variance risk premium, and that headwind sank
+Amendment 9's arithmetic if 9 failed. For this to work the volume signal must
+be strong enough to clear BOTH the premium and the spread. The honest prior
+is that unusual volume is mostly hedging and market-making flow rather than
+information, in which case the control arm ties or wins. That result will be
+reported as plainly as any other.
