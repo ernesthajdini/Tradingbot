@@ -575,3 +575,69 @@ means one bad holding is half the book. Expect higher returns AND far worse
 drawdowns, and expect the drawdown constraint to be what kills these, not
 the return. The control arm exists precisely so a concentration-driven
 result cannot be mistaken for a signal-driven one.
+
+---
+
+# AMENDMENT 9 — long puts on a validated signal (declared 2026-08-31, BEFORE running)
+
+## Deviation, stated plainly
+
+Amendment 6B said that if the third window failed, "no further options
+amendment will be written". It failed and I honoured that. The owner has now
+directed that options are the sole focus, so this amendment exists by his
+instruction. The 6B commitment was written about premium SELLING — the thing
+actually tested — and I phrased it more broadly than the evidence warranted.
+What is closed stays closed: nothing here re-litigates selling premium.
+This is the opposite side of the trade.
+
+## Why this specific test
+
+Across 306 configurations exactly ONE effect survived out-of-sample
+validation: stocks at a 52-week high UNDERPERFORM the universe by 104bp
+(train) and 150bp (validate) over the following 21 sessions, with the same
+sign and similar size in both windows. I set it aside because monetising a
+negative view needs shorting, which is neither fundable nor practical at
+$1,200.
+
+That was the wrong conclusion. A LONG PUT expresses exactly that view with
+defined risk, costs $50-200 rather than requiring margin, and single-name
+put chains are already on disk. This is the first test in the project where
+a validated signal meets an instrument that suits the account.
+
+The honest counter-argument, stated before running: a bought option bleeds
+time value every day, and 130bp a month of drift may simply not cover it.
+That is the question.
+
+## A. Declared space (18 configurations)
+
+Universe: the single-name option universe already pulled, production
+liquidity gates, delisted names included, 2017-02-08 onward.
+
+| knob | values |
+|---|---|
+| entry signal | at_52w_high ; at_52w_high AND rsi>70 ; none (CONTROL: random eligible names) |
+| put delta | 0.30 ; 0.40 (nearer the money = more delta, less leverage) |
+| exit | hold to 21 DTE ; take profit at +100% of premium, else 21 DTE ; hold to expiry |
+
+3 x 2 x 3 = **18 configurations.** DTE window fixed at production 25-45.
+Position sizing: one contract per signal, capped at 2 concurrent, since a
+long put's max loss is its premium.
+
+Friction: the production model — $1.00 per contract per leg (2 legs round
+trip) plus the standard slippage band on premium paid and received.
+
+## B. Discipline
+
+TRAIN 2017-02-08..2021-12-31; VALIDATE 2022-2023 on promotion; SEALED 2024+
+stays shut. alpha = 0.05/promoted. Promotion needs >= 100 closed trades,
+positive mean at the PESSIMISTIC band, positive median, no single trade
+above 40% of total P&L, AND beating its own matched control arm.
+
+## C. Stated in advance
+
+Long options have a structural headwind: the variance risk premium exists
+because buyers overpay on average, which is the same fact that made SELLING
+look attractive for 300 configurations. A long-put strategy must therefore
+beat not just zero but that premium. The expected result is that the signal
+is real and the time decay eats it. The control arm decides whether any
+result is the signal or just a directional bet that happened to pay.
