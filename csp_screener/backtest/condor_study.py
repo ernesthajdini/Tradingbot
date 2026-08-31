@@ -143,10 +143,35 @@ def value_of(rows, wing, side):
     return v if v >= 0 else None
 
 
+
+def spot_at(prices, ticker, asof):
+    px = prices.get(ticker)
+    if px is None:
+        return None
+    h = px[px.index.date <= asof]
+    if h.empty:
+        return None
+    return float(h["Close"].iloc[-1])
+
+
+def intrinsic_value(pos, spot):
+    """What the structure is actually worth, per contract, ignoring time
+    value. A short vertical is worth what it costs to close: the amount the
+    short leg is in the money, capped at the width."""
+    total = 0.0
+    for side, w in pos["wings"].items():
+        if side == "put":
+            itm = max(0.0, w["short"] - spot)
+        else:
+            itm = max(0.0, spot - w["short"])
+        total += min(itm, w["width"]) * 100.0
+    return total
+
+
 def run(structure, scale, delta, store, cand, prices, window):
     width, max_risk = scale
     dates = [d for d in store.dates if window[0] <= d <= window[1]]
-    book, trades = [], []
+    book, trades, unsettled = [], [], []
     cooldown = {}
     for asof in dates:
         day = store.day(asof)
@@ -168,10 +193,31 @@ def run(structure, scale, delta, store, cand, prices, window):
                         break
                     parts.append(v)
                 val = sum(parts) if ok else None
+            unmarked = val is None
             if val is None:
-                if dte > 0:
-                    continue          # no honest mark today; hold
-                val = 0.0             # expired
+                # BUG FOUND AND FIXED (this cost the first condor result):
+                # this branch used to book val = 0.0 at expiry — "expired
+                # worthless, keep the whole credit". But a position becomes
+                # UNMARKABLE precisely when it goes against you: the ITM leg's
+                # spread blows out and the mark gate rejects it. So every
+                # maximum loss was being recorded as a maximum win. It hit
+                # 64.5% of condor trades at an average of +$146, manufacturing
+                # the entire "finding". Settle at INTRINSIC instead, which is
+                # what the position is actually worth at expiry.
+                spot_now = spot_at(prices, pos["ticker"], asof)
+                if spot_now is None:
+                    if dte > 0:
+                        continue
+                    # No spot to settle against: drop the position from the
+                    # record rather than invent a value for it, and count it.
+                    book.remove(pos)
+                    unsettled.append(pos)
+                    continue
+                val = intrinsic_value(pos, spot_now)
+                if dte > 0 and not (
+                        (pos["credit"] - val) <= -STOP_MULT * pos["credit"]
+                        or dte <= EXIT_DTE):
+                    continue          # unmarkable but not yet due to exit
             pnl_pct = (pos["credit"] - val) / pos["credit"]
             hit = (pnl_pct >= TP or dte <= EXIT_DTE
                    or (pos["credit"] - val) <= -STOP_MULT * pos["credit"])
@@ -180,6 +226,10 @@ def run(structure, scale, delta, store, cand, prices, window):
             econ_b = close_economics(pos["credit"], val, "csp")
             gross = pos["credit"] - val
             trades.append({
+                "exit": ("expiry_unmarked" if unmarked else
+                         "tp" if pnl_pct >= TP else
+                         "dte" if dte <= EXIT_DTE else "stop"),
+                "dte_at_exit": dte,
                 "ticker": pos["ticker"], "opened": pos["opened"].isoformat(),
                 "closed": asof.isoformat(), "credit": pos["credit"],
                 "exit_value": val, "gross": gross,
@@ -243,7 +293,15 @@ def run(structure, scale, delta, store, cand, prices, window):
     a = np.array([t["pnl_pess"] for t in trades])
     b = np.array([t["pnl"] for t in trades])
     worst = abs(a.min()) / abs(a.sum()) if a.sum() else float("inf")
-    return {"n": len(a), "mean_pess": float(a.mean()), "mean_base": float(b.mean()),
+    from collections import Counter
+    exits = Counter(t["exit"] for t in trades)
+    by_exit = {k: (len([t for t in trades if t["exit"] == k]),
+                   round(float(np.mean([t["pnl_pess"] for t in trades
+                                        if t["exit"] == k])), 2))
+               for k in exits}
+    return {"exits": dict(exits), "by_exit": by_exit,
+            "unsettled": len(unsettled),
+            "n": len(a), "mean_pess": float(a.mean()), "mean_base": float(b.mean()),
             "total_pess": float(a.sum()), "median_pess": float(np.median(a)),
             "win": float((a > 0).mean()), "worst_share": float(worst),
             "avg_credit": float(np.mean([t["credit"] for t in trades])),
