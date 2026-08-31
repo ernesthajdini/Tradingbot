@@ -450,3 +450,70 @@ shopping. What makes it defensible is that the terms, the configurations
 and the binding consequence are fixed BEFORE the run, and that the window
 is genuinely independent data neither the search nor the validation ever
 touched.
+
+---
+
+# AMENDMENT 7 — chart patterns: do they predict anything? (declared 2026-08-31, BEFORE running)
+
+Amendment 6 closed premium selling. This asks the owner's question directly:
+can a chart be READ? Amendment 3 tested the quantified core of chart reading
+(momentum, reversal, trend, volatility) as tradeable portfolios and all four
+failed after costs — but that conflated two questions this leg separates:
+
+1. **Statistical:** does a pattern's occurrence shift the distribution of
+   forward returns at all, versus the same stocks on all other days?
+2. **Economic:** is that shift large enough to trade after $2 round-trip
+   commissions and slippage?
+
+A pattern can pass (1) and fail (2). That is worth knowing precisely,
+because it says whether the chart carries information the account is simply
+too small to monetise, or no information at all.
+
+## A. Declared patterns (12) x horizons (3) = 36 tests
+
+OHLC was never loaded before — the stock loader kept only Close, so no
+range or candle pattern has ever been testable here. Raw files carry
+open/high/low/close/volume.
+
+| # | pattern |
+|---|---|
+| 1 | 20-day breakout (close > prior 20-day high) |
+| 2 | 52-week high |
+| 3 | 20-day breakdown (close < prior 20-day low) |
+| 4 | gap up > 3% |
+| 5 | gap down > 3% |
+| 6 | inside day (high < prior high AND low > prior low) |
+| 7 | NR7 (narrowest true range of the last 7 sessions) |
+| 8 | golden cross (50-day crosses above 200-day) |
+| 9 | RSI(14) < 30 |
+| 10 | RSI(14) > 70 |
+| 11 | volume spike (volume > 3x its 20-day average) |
+| 12 | hammer (lower wick >= 2x body, close in the top third of the range) |
+
+Forward horizons: 1, 5 and 21 sessions, measured on split-adjusted closes.
+
+## B. Method
+
+Universe and liquidity filters as production: price >= $5, 20-day average
+volume >= 1,000,000, as-of-date, delisted names included. For each pattern
+and horizon: mean forward return on signal days versus the mean over ALL
+eligible stock-days (the base rate), Welch t-test, and the edge restated in
+basis points. Effects are also reported net of a 0.83% round-trip cost
+(the measured $2 commission plus slippage on a $240 position) so the
+statistical and economic answers are visible side by side.
+
+TRAIN 2017-02-08..2021-12-31 for discovery; any pattern significant there is
+re-measured once on 2022-2023. Sealed 2024+ stays shut — Amendment 6B spent
+the third window on condors and it is not reopened.
+
+alpha = 0.05 / 36 = 0.00139. With ~9,000 names over five years these tests
+have enormous sample sizes, so tiny and useless effects WILL reach
+significance; the report leads with effect size, not p-values.
+
+## C. Stated in advance
+
+Published research finds most classic chart patterns carry little to no
+out-of-sample edge, and that what remains is smaller than retail transaction
+costs. The expected result is therefore "some patterns shift returns by a
+few basis points, none by enough to trade at this account size." If that is
+what comes back, it is the answer to the question, not a failure to look.
