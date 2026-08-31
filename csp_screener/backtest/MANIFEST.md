@@ -641,3 +641,25 @@ look attractive for 300 configurations. A long-put strategy must therefore
 beat not just zero but that premium. The expected result is that the signal
 is real and the time decay eats it. The control arm decides whether any
 result is the signal or just a directional bet that happened to pay.
+
+## Amendment 9A — two POWER corrections, declared before the full run
+
+A smoke test on 2018 alone (knob-bite proof only, no result read as evidence)
+exposed two sampling limits that would starve the test:
+
+1. **Weekly scan discards a daily signal.** A 52-week high is a daily event;
+   scanning only Mondays saw 71 of them in a year. Entry cadence changes to
+   DAILY, with at most 3 entries per date and the existing 30-day per-ticker
+   cooldown intact.
+2. **The store holds MONTHLY expiries only.** On a given date a 25-45 day
+   window frequently contains no expiry at all — 32 of 71 signals died on
+   this, not on anything about the trade. The window widens to **20-60 DTE**,
+   which is what "roughly one month out" means when only monthlies exist.
+
+Neither is a new strategy. Neither adds a configuration: the grid stays at 18.
+Both increase the number of observations WITHOUT changing what is traded, and
+both are declared here before the full run, in the same commit as the code.
+
+The 2018 smoke test also showed the CONTROL arm beating the signal arm.
+That is recorded here, in advance, as the direction to expect. If the full
+train window repeats it, the hypothesis is dead and will be reported dead.
