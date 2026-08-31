@@ -168,11 +168,48 @@ def intrinsic_value(pos, spot):
     return total
 
 
-def run(structure, scale, delta, store, cand, prices, window):
+
+def model_value(pos, spot, asof, rows):
+    """What it would COST to close an unmarkable position, including the
+    time value intrinsic settlement ignores.
+
+    Our specific strike may be unquotable while the rest of the expiry is
+    perfectly liquid, so vol comes from the same expiry's markable strikes
+    (median IV). Priced with the same Black-Scholes the store inverted, so
+    the valuation is self-consistent with entry. Falls back to intrinsic
+    only if the whole expiry is unquotable.
+    """
+    from csp_screener.backtest.build_condor_store import bs_call
+    from csp_screener.backtest.day_store import bs_put
+    import numpy as _np
+    dte = (pos["expiration"] - asof).days
+    if dte <= 0:
+        return intrinsic_value(pos, spot)
+    ivs = rows["iv"].dropna() if rows is not None and not rows.empty else None
+    if ivs is None or ivs.empty:
+        return intrinsic_value(pos, spot)
+    sigma = float(ivs.median())
+    if not _np.isfinite(sigma) or sigma <= 0:
+        return intrinsic_value(pos, spot)
+    T = _np.array([dte / 365.0])
+    S = _np.array([spot])
+    sig = _np.array([sigma])
+    total = 0.0
+    for side, w in pos["wings"].items():
+        pricer = bs_put if side == "put" else bs_call
+        short = float(pricer(S, _np.array([w["short"]]), T, sig)[0])
+        long_ = float(pricer(S, _np.array([w["long"]]), T, sig)[0])
+        total += max(0.0, min((short - long_) * 100.0, w["width"] * 100.0))
+    return total
+
+
+def run(structure, scale, delta, store, cand, prices, window,
+        stop_mult=STOP_MULT, on_stop="close"):
     width, max_risk = scale
     dates = [d for d in store.dates if window[0] <= d <= window[1]]
     book, trades, unsettled = [], [], []
     cooldown = {}
+    rolled = set()
     for asof in dates:
         day = store.day(asof)
         if day.empty:
@@ -213,14 +250,19 @@ def run(structure, scale, delta, store, cand, prices, window):
                     book.remove(pos)
                     unsettled.append(pos)
                     continue
-                val = intrinsic_value(pos, spot_now)
+                # Time value matters: closing a tested vertical at 21 DTE
+                # costs MORE than intrinsic. Settling at intrinsic flattered
+                # exactly the path that carried the result (46% of trades,
+                # +$68.78 with no stop vs -$2.51 with one).
+                val = model_value(pos, spot_now, asof, rows)
                 if dte > 0 and not (
                         (pos["credit"] - val) <= -STOP_MULT * pos["credit"]
                         or dte <= EXIT_DTE):
                     continue          # unmarkable but not yet due to exit
             pnl_pct = (pos["credit"] - val) / pos["credit"]
-            hit = (pnl_pct >= TP or dte <= EXIT_DTE
-                   or (pos["credit"] - val) <= -STOP_MULT * pos["credit"])
+            stopped = (stop_mult is not None
+                       and (pos["credit"] - val) <= -stop_mult * pos["credit"])
+            hit = pnl_pct >= TP or dte <= EXIT_DTE or stopped
             if not hit:
                 continue
             econ_b = close_economics(pos["credit"], val, "csp")
@@ -238,7 +280,16 @@ def run(structure, scale, delta, store, cand, prices, window):
                 "risk": pos["risk"],
             })
             book.remove(pos)
-            cooldown[pos["ticker"]] = asof + timedelta(days=3)
+            # AMENDMENT 6: rolling. A stopped-out position may be re-opened
+            # in the same underlying at the NEXT expiry with no cooldown —
+            # the practitioner's response to a tested short strike, which no
+            # study here has ever modelled. The realised loss is booked in
+            # full first; the roll is a NEW position on its own merits.
+            if stopped and on_stop == "roll":
+                cooldown.pop(pos["ticker"], None)
+                rolled.add(pos["ticker"])
+            else:
+                cooldown[pos["ticker"]] = asof + timedelta(days=3)
 
         # ---- entries
         uni = cand.get(asof.isoformat(), {}).get("live", [])
@@ -246,6 +297,7 @@ def run(structure, scale, delta, store, cand, prices, window):
         for tk in uni:
             if len(book) >= config.MAX_VIRTUAL_OPEN or tk in open_t:
                 continue
+            rolled.discard(tk)
             if cooldown.get(tk) and asof <= cooldown[tk]:
                 continue
             px = prices.get(tk)
