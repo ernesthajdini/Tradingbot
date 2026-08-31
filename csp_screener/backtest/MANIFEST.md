@@ -715,3 +715,71 @@ be strong enough to clear BOTH the premium and the spread. The honest prior
 is that unusual volume is mostly hedging and market-making flow rather than
 information, in which case the control arm ties or wins. That result will be
 reported as plainly as any other.
+
+---
+
+# AMENDMENT 11 — long volatility on index ETFs, gated by IV rank (declared 2026-08-31, BEFORE running)
+
+## The measurement that motivates this
+
+Amendments 9 and 10 both died, and the reason turned out to be structural
+rather than about any signal. Measured on the purchased data, matched on
+delta (0.25-0.45), DTE (20-60) and open interest (>=100), 2017-2023:
+
+| universe | median spread | round-trip spread + commission |
+|---|---|---|
+| single names | $0.15 on $1.23 mid | **13.9% of premium** |
+| index ETFs | $0.07 on $1.78 mid | **5.0% of premium** |
+
+Single-name options charge ~14% of premium to enter and exit. The variance
+risk premium is worth roughly 3-5% a month. The toll is three to four times
+the entire edge, which is why the BUYER lost in Amendments 9-10 and the
+SELLER lost in Amendments 1-6. Both sides were paying the same market maker.
+That single fact retires every single-name option study in this project.
+
+Index options cost 2.8x less. And a BOUGHT index option needs only its
+premium — a ~$178 median contract — not the ~$8,000 of collateral that made
+index spread SELLING unaffordable. That combination has never been tested.
+
+## Why long volatility and not another directional bet
+
+Amendment 9 established the threshold a directional signal must clear: about
+2.5-3% per month, versus the ~1.3% the best validated signal produced. No
+signal in this project is close. So this amendment stops betting on direction
+and buys VOLATILITY, which is the one thing an option expresses that no stock
+position can. The hypothesis is the standard one: the variance risk premium
+is small or negative when implied vol is already at the bottom of its own
+range, so options bought there are cheap relative to what follows.
+
+## A. Declared space (18 configurations)
+
+| knob | values |
+|---|---|
+| IV regime (per-ticker IV rank over trailing 252 sessions) | bottom 20% ; bottom 40% ; none (CONTROL — enter regardless) |
+| structure | ATM straddle (put + call) ; 0.30-delta put ; 0.30-delta call |
+| exit | 21 DTE ; hold to expiry |
+
+Universe: the 29 index/sector ETFs already pulled. Entry weekly (Mondays)
+with a 30-day per-ticker cooldown, so trades do not overlap themselves.
+20-60 DTE. Two-sided quotes and OI >= 100 required on every leg. Total
+premium per position capped at $600.
+
+Friction: $1.00 per contract per leg, and the straddle is charged for FOUR
+legs round trip because it is two contracts in and two out.
+
+## B. Discipline
+
+TRAIN 2017-01-03..2021-12-31; VALIDATE 2022-2023 on promotion; SEALED 2024+
+shut. Promotion needs n >= 100, positive mean at the PESSIMISTIC band,
+positive median, no trade above 40% of total P&L, and beating its own matched
+control arm.
+
+## C. Stated in advance
+
+Low IV rank is not free money: implied vol is usually low because realized
+vol is low, and a straddle bought in a quiet market normally decays quietly
+to zero. The effect being tested is narrower — that the GAP between implied
+and subsequent realized is smallest at the bottom of the IV range. If the
+control arm ties the signal arms, long volatility is simply the mirror of
+premium selling and dies for the mirror reason, which would close BOTH
+directions on index options as well and end the search.
