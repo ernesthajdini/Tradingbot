@@ -517,3 +517,61 @@ out-of-sample edge, and that what remains is smaller than retail transaction
 costs. The expected result is therefore "some patterns shift returns by a
 few basis points, none by enough to trade at this account size." If that is
 what comes back, it is the answer to the question, not a failure to look.
+
+---
+
+# AMENDMENT 8 — concentration + pattern signals (declared 2026-08-31, BEFORE running)
+
+Amendment 7 found two real effects and I closed the question too early. Two
+things were missed, and both are mechanical rather than hopeful.
+
+**1. Cost is mostly FIXED per trade, so concentration collapses it.** IBKR
+charges a $1.00 minimum per stock order. Every study so far used 5 or 10
+positions — $120-240 each at this account size — where that $1 is 0.4-0.8%
+EACH WAY. At 3 positions it is ~0.25% and at 2 positions ~0.17%. Measured
+round trips: 10 names ~1.7%, 5 names ~0.83%, 3 names ~0.50%, 2 names ~0.33%.
+The gap-up signal's absolute 21-day return was +170bp (train) / +94bp
+(valid); it loses to an 83bp round trip and beats a 33bp one. Position count
+was never a declared knob below 5 — that is an omission, not a finding.
+
+**2. The 52-week-high effect needs no shorting to be useful.** Stocks at new
+52-week highs underperformed by 104bp (train) and 150bp (valid). I dismissed
+it as unshortable, but as an EXCLUSION filter on a long book it costs
+nothing to apply.
+
+## A. Declared space (24 configurations)
+
+Universe and liquidity exactly as Amendment 3/7: price >= $5, 20-day average
+volume >= 1M, as-of-date, delisted names included, long only.
+
+| knob | values |
+|---|---|
+| entry signal | gap_up_3pct ; gap_up_3pct AND NOT at a 52-week high ; 20-day breakout AND NOT at a 52-week high ; none (random eligible = control) |
+| portfolio size | 2 ; 3 ; 5 |
+| holding period | 21 ; 63 sessions |
+
+4 x 3 x 2 = **24 configurations.** The "none" arm is a control, not a
+strategy: if a signal cannot beat randomly chosen eligible names at the same
+concentration and cost, the signal is doing nothing and the result is
+concentration luck.
+
+Friction is charged as measured: $1.00 per trade each way plus 0.10% (base)
+/ 0.25% (pessimistic) slippage — so the cost advantage of concentration
+appears in the P&L rather than being assumed.
+
+## B. Discipline
+
+TRAIN 2017-02-08..2021-12-31; VALIDATE 2022-2023 on promotion; SEALED 2024+
+stays shut (spent on condors in Amendment 6B). alpha = 0.05/promoted.
+
+Promotion requires ALL of: >= 100 closed positions; positive total at the
+PESSIMISTIC band; beats SPY buy-and-hold over the same window; max drawdown
+<= 1.5x SPY's; AND beats its own matched control arm.
+
+## C. Stated in advance
+
+Concentration cuts cost and multiplies variance in equal measure: 2 names
+means one bad holding is half the book. Expect higher returns AND far worse
+drawdowns, and expect the drawdown constraint to be what kills these, not
+the return. The control arm exists precisely so a concentration-driven
+result cannot be mistaken for a signal-driven one.
