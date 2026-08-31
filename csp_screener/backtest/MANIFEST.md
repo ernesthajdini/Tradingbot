@@ -389,3 +389,64 @@ can only be LOWER than the put leg's, not higher. The most likely outcome is
 therefore another under-powered sample — and if so, the finding is that the
 structure is unreachable at this frequency, not that it was tested and
 failed.
+
+---
+
+# AMENDMENT 6 — condor management, and the third window (declared 2026-08-31, BEFORE running)
+
+Amendment 5's corrected condor is the only structure in 278 configurations
+with a positive TRAIN result that is not an artifact: +$27.96/trade over 170
+trades at $10-wide / $800-risk / 0.20-delta. Its validation returned
+-$27.30/trade on 77 trades with a bootstrap CI of [-89.88, +29.64]. That
+interval spans both outcomes: it is an UNDERPOWERED TEST, not a clean
+rejection, and saying "it failed" would overstate the evidence exactly as
+badly as saying "it worked".
+
+Two things follow, and both are declared here before either runs.
+
+## A. Management is the untested lever (4 configurations)
+
+Every study so far takes maximum loss on a tested position. No practitioner
+does that; they roll. The mechanism is real and specific: a short vertical
+whose short strike is breached can be closed and re-opened at a later
+expiry for a NET CREDIT, because the further-dated option carries more time
+value. That either buys the position time to recover or compounds the loss —
+which of the two is an empirical question this project has never asked.
+
+Fixed at the best-performing cell (iron_condor, $10 wide, $800 risk, 0.20
+delta, 25-45 DTE, 50% take-profit):
+
+| knob | values |
+|---|---|
+| stop policy | 2x credit (production) ; none (hold to the 21-DTE exit) |
+| on stop | close (current behaviour) ; roll — immediately re-open the same underlying at the next expiry, no cooldown |
+
+2 x 2 = **4 configurations.** Longer-dated condors (45-70 DTE) were
+considered and are NOT included: the index pull fetched a 50-day active
+window per expiry, so no quotes exist at 70 DTE. Testing them would need a
+re-pull, and inventing the data is not an option.
+
+## B. The third window — a declared deviation from the sealed-period rule
+
+The original rule reserved 2024+ for ONE configuration that survived
+validation. Nothing survived, so under a literal reading the window stays
+shut forever and the condor question stays permanently ambiguous.
+
+I am opening it for the condor, ONCE, and the terms are fixed now:
+
+1. Only the Amendment 5 corrected condor and the four Amendment 6 variants
+   may touch 2024-01-01 onward. Nothing else, ever.
+2. The result is BINDING IN BOTH DIRECTIONS. If the third window is
+   positive with a CI excluding zero, the condor is the project's finding
+   and goes to a production rewrite with its own verification. If it is
+   negative or inconclusive, premium selling is CLOSED as this account's
+   destination and no further options amendment will be written.
+3. It is reported whatever it says, in full, including trade counts and
+   confidence intervals.
+
+This is a deviation, and calling it anything else would be dishonest: a
+third window opened after a failed second window is the shape of window
+shopping. What makes it defensible is that the terms, the configurations
+and the binding consequence are fixed BEFORE the run, and that the window
+is genuinely independent data neither the search nor the validation ever
+touched.
