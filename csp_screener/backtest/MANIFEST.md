@@ -783,3 +783,105 @@ and subsequent realized is smallest at the bottom of the IV range. If the
 control arm ties the signal arms, long volatility is simply the mirror of
 premium selling and dies for the mirror reason, which would close BOTH
 directions on index options as well and end the search.
+
+## VERDICTS — Amendments 9, 10, 11 (recorded 2026-08-31)
+
+**All three dead. 0 of 54 configurations promoted. Running total: 360.**
+
+| amendment | best arm | its control | verdict |
+|---|---|---|---|
+| 9 long puts on 52w-high | -$18.88/trade | -$0.10 | signal arms WORSE than random |
+| 10 unusual put volume | -$15.17/trade | -$24.60 | beats random by ~$9, still negative |
+| 11 long vol on index ETFs | -$6.81/trade | -$25.40 | IV-rank gate helps, still negative |
+
+### What actually explains all 360
+
+Two measurements, both taken from the purchased data, close the question:
+
+**1. The toll is bigger than the prize (single names).** Matched on delta,
+DTE and open interest, single-name options cost **13.9% of premium** per
+round trip against a variance risk premium worth 3-5% a month. Index options
+cost **5.0%**. This is why the BUYER lost in 9-10 and the SELLER lost in 1-6:
+both were paying the same market maker.
+
+**2. Buying volatility loses BEFORE any friction.** With slippage set to
+zero — entering at the ask, exiting at the bid, $1/leg commission only — the
+index straddle still returns **-$37/trade** and the low-IV-gated straddle
+**-$18**. The premium is real and the buyer pays it. Friction deepens the
+loss; it does not cause it. The only gross-positive cell was buying calls
+(+$14), which is long beta in a bull market, not an edge.
+
+Together these fix the bar a directional signal must clear to be tradeable
+through a LONG option: **about 2.5-3% per month.** The best validated signal
+in this project produces 1.3%. It is short by roughly half.
+
+### Long-dated options: closed WITHOUT a data pull
+
+The obvious response — pay the toll once over a year instead of monthly —
+was tested for free on stock data before spending subscription time. The
+52-week-high effect does not survive the horizon:
+
+| horizon | train edge/mo | validate edge/mo | validate p |
+|---|---|---|---|
+| 21d | -1.38% | **-1.30%** | 7e-19 |
+| 63d | -0.97% | -0.15% | 0.07 |
+| 126d | -0.45% | **+0.06%** (sign flips) | 0.28 |
+| 252d | -0.48% | -0.07% | 0.81 |
+
+The signal exists at 21 days and nowhere else. A LEAPS would have been bought
+to capture something that is not there at that tenor. No pull was made.
+
+---
+
+# AMENDMENT 12 — short call spreads on 52-week-high names (declared 2026-08-31, BEFORE the data exists)
+
+## The one combination never tested
+
+Every premium-selling amendment (1-6) sold PUTS or condors — bullish or
+neutral. Every buying amendment (9-11) paid the variance risk premium. The
+two measured facts of this project are:
+
+* option buyers overpay (measured: long vol loses gross of friction)
+* names at a 52-week high underperform for 21 days (validated: p=7e-19)
+
+A short CALL spread on a 52-week-high name is the only structure in which
+those two point the SAME WAY. Selling puts fought the signal; buying puts
+fought the premium; this fights neither. It is also affordable — a $2-wide
+defined-risk spread needs ~$200 of collateral, not the ~$8,000 that made
+index spread selling impossible.
+
+## Declared honestly, before running
+
+This may well fail, and the reason it would is nameable in advance: a
+52-week-high name is a momentum name, and the call seller's left tail is
+exactly the name that keeps running. A 1.3% average underperformance can sit
+on top of a fat right tail, and that tail is what killed Amendments 1-6 in
+mirror image. The 13.9% single-name toll applies here too, on two legs.
+
+**Prediction stated before the data is pulled: roughly even odds.** If the
+tail dominates, this closes options in every direction for this account and
+the search ends, which is a real answer and will be reported as one.
+
+## A. Declared space (12 configurations)
+
+| knob | values |
+|---|---|
+| signal | at_52w_high ; none (CONTROL) |
+| short-leg delta | 0.25 ; 0.30 |
+| spread width | $2 ; $5 |
+| exit | 21 DTE ; 50% of credit |
+
+2 x 2 x 2 x ... = 16 cells; the runnable count is whatever survives the
+liquidity gates and is counted from runs_log.jsonl, not assumed.
+
+## B. Discipline
+
+Unchanged. TRAIN 2017-02-08..2021-12-31, VALIDATE 2022-2023 on promotion,
+SEALED 2024+ shut. n >= 100, positive mean at the PESSIMISTIC band, positive
+median, no trade above 40% of P&L, must beat its own matched control.
+
+## C. Data requirement
+
+Single-name CALL chains, which are NOT on disk — every single-name pull so
+far requested `right: put`. The pull runs against a subscription already paid
+for through ~25 Sep and is started now because that window closes.
