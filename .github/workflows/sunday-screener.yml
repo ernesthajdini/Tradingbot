@@ -1,20 +1,21 @@
 # ============================================================================
-# PAUSED 2026-08-29 (owner decision). The 8-year study across 240 declared
-# configurations found no edge in this strategy family, so the 200-trade
-# go-live gate these runs were feeding no longer has a decision to serve.
-# See csp_screener/backtest/STUDY_VERDICT.md.
+# RESUMED 2026-09-01 (owner decision), after the zero-bid entry bug was fixed
+# in main.py — entries now require a real two-sided quote, so the paper record
+# stops accumulating contracts nobody was bidding on.
 #
-# Nothing is deleted: workflow_dispatch still runs the full pipeline on
-# demand, and un-commenting the schedule block below restores the crons
-# exactly as they were.
+# Standing context: the backtest programme found no edge across 360 declared
+# configurations (csp_screener/backtest/MANIFEST.md). These runs therefore
+# feed the PAPER record and the dashboard, not a live-trading decision. The
+# 200-trade go-live gate remains forward-operational and is not satisfied by
+# any simulated history.
 # ============================================================================
 name: CSP Screener — Sunday weekly run
 
 on:
-  # schedule:
-  # # 22:00 UTC on Sunday = 18:00 ET (when DST is on; 17:00 EST otherwise).
-  # # Run an hour early to ensure the weekly email arrives before users wake up Monday.
-  # - cron: '0 22 * * 0'
+  schedule:
+  # 22:00 UTC on Sunday = 18:00 ET (when DST is on; 17:00 EST otherwise).
+  # Run an hour early to ensure the weekly email arrives before users wake up Monday.
+  - cron: '0 22 * * 0'
   workflow_dispatch:  # also runnable manually
 
 jobs:

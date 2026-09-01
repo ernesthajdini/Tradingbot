@@ -14,6 +14,9 @@ const ITEMS = [
   // two tabs sharing an icon would be indistinguishable.
   { href: '/track-record', label: 'Track Record', icon: '📜' },
   { href: '/learning', label: 'Learning', icon: '🧠' },
+  // Research is the backtest programme — read-only, static, and the context
+  // every other tab should be read against.
+  { href: '/research', label: 'Research', icon: '🔬' },
   { href: '/system', label: 'System', icon: '🛠️' },
 ];
 

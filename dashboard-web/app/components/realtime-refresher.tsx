@@ -24,13 +24,24 @@ export function RealtimeRefresher() {
   const router = useRouter();
   const pathname = usePathname();
   const [connected, setConnected] = useState(false);
+  const [misconfigured, setMisconfigured] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<string>('');
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (pathname.startsWith('/login')) return;
 
-    const supabase = createClient();
+    // createClient() throws on missing NEXT_PUBLIC_SUPABASE_* env vars. This
+    // component is mounted from the root layout, so an uncaught throw here
+    // white-screens EVERY page with "Application error" — including pages
+    // that need no data at all, like /research. Degrade instead: keep the
+    // polling refresh, and say so in the pill rather than dying silently.
+    let supabase: ReturnType<typeof createClient> | null = null;
+    try {
+      supabase = createClient();
+    } catch {
+      setMisconfigured(true);
+    }
 
     const refresh = () => {
       // Debounce: a screen write inserts many rows in quick succession —
@@ -42,17 +53,20 @@ export function RealtimeRefresher() {
       }, 800);
     };
 
-    let channel = supabase.channel('dashboard-live');
-    for (const table of WATCHED_TABLES) {
-      channel = channel.on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table },
-        refresh
-      );
+    let channel: ReturnType<NonNullable<typeof supabase>['channel']> | null = null;
+    if (supabase) {
+      channel = supabase.channel('dashboard-live');
+      for (const table of WATCHED_TABLES) {
+        channel = channel.on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table },
+          refresh
+        );
+      }
+      channel.subscribe((status) => {
+        setConnected(status === 'SUBSCRIBED');
+      });
     }
-    channel.subscribe((status) => {
-      setConnected(status === 'SUBSCRIBED');
-    });
 
     // Fallback polling — keeps data at most 60s stale even without websocket
     const interval = setInterval(() => {
@@ -61,7 +75,7 @@ export function RealtimeRefresher() {
     }, 60_000);
 
     return () => {
-      supabase.removeChannel(channel);
+      if (supabase && channel) supabase.removeChannel(channel);
       clearInterval(interval);
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
@@ -76,11 +90,18 @@ export function RealtimeRefresher() {
                     px-3 py-1 text-[11px] text-muted select-none">
       <span
         className={`inline-block w-2 h-2 rounded-full ${
-          connected ? 'bg-success animate-pulse' : 'bg-muted'
+          misconfigured ? 'bg-danger'
+            : connected ? 'bg-success animate-pulse' : 'bg-muted'
         }`}
       />
-      {connected ? 'Live' : 'Polling'}
-      {lastUpdate && <span className="opacity-60">· {lastUpdate}</span>}
+      {misconfigured
+        ? <span className="text-danger" title="NEXT_PUBLIC_SUPABASE_URL / _ANON_KEY not set">
+            Supabase not configured
+          </span>
+        : connected ? 'Live' : 'Polling'}
+      {!misconfigured && lastUpdate && (
+        <span className="opacity-60">· {lastUpdate}</span>
+      )}
     </div>
   );
 }

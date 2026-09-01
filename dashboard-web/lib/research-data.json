@@ -1,0 +1,296 @@
+{
+ "generated": "2026-09-01T09:44:40",
+ "totals": {
+  "configs_run": 346,
+  "runs_logged": 609,
+  "survivors": 0
+ },
+ "structural": {
+  "generated": "2026-09-01T09:39:15.058108",
+  "method": "contracts matched on |delta| 0.25-0.45, DTE 20-60, open interest >= 100, 2017-2023; commission $1.00 per contract per leg",
+  "round_trip_toll": [
+   {
+    "universe": "single names",
+    "n_contracts": 4306,
+    "median_mid": 1.23,
+    "median_spread": 0.15,
+    "median_spread_pct_of_mid": 12.1,
+    "round_trip_usd": 17.0,
+    "round_trip_pct_of_premium": 13.9
+   },
+   {
+    "universe": "index ETFs",
+    "n_contracts": 14478,
+    "median_mid": 1.78,
+    "median_spread": 0.07,
+    "median_spread_pct_of_mid": 4.8,
+    "round_trip_usd": 9.0,
+    "round_trip_pct_of_premium": 5.0
+   }
+  ],
+  "signal_horizon_decay": [
+   {
+    "window": "train",
+    "horizon_days": 21,
+    "n": 34060,
+    "edge_pct": -1.38,
+    "edge_pct_per_month": -1.38,
+    "p": 1.3462413828744305e-52
+   },
+   {
+    "window": "train",
+    "horizon_days": 63,
+    "n": 33839,
+    "edge_pct": -2.92,
+    "edge_pct_per_month": -0.97,
+    "p": 3.2313038143445782e-71
+   },
+   {
+    "window": "train",
+    "horizon_days": 126,
+    "n": 33536,
+    "edge_pct": -2.69,
+    "edge_pct_per_month": -0.45,
+    "p": 9.813388676539477e-26
+   },
+   {
+    "window": "train",
+    "horizon_days": 252,
+    "n": 33114,
+    "edge_pct": -5.79,
+    "edge_pct_per_month": -0.48,
+    "p": 1.5192687371285949e-61
+   },
+   {
+    "window": "valid",
+    "horizon_days": 21,
+    "n": 8767,
+    "edge_pct": -1.3,
+    "edge_pct_per_month": -1.3,
+    "p": 7.344347270266909e-19
+   },
+   {
+    "window": "valid",
+    "horizon_days": 63,
+    "n": 8639,
+    "edge_pct": -0.45,
+    "edge_pct_per_month": -0.15,
+    "p": 0.07147801559463886
+   },
+   {
+    "window": "valid",
+    "horizon_days": 126,
+    "n": 8550,
+    "edge_pct": 0.37,
+    "edge_pct_per_month": 0.06,
+    "p": 0.27870865331734196
+   },
+   {
+    "window": "valid",
+    "horizon_days": 252,
+    "n": 8425,
+    "edge_pct": -0.85,
+    "edge_pct_per_month": -0.07,
+    "p": 0.8065639845417731
+   }
+  ]
+ },
+ "amendments": [
+  {
+   "id": "1-2",
+   "title": "Premium selling \u2014 the full grid",
+   "question": "Does selling cash-secured puts or put spreads pay at this size?",
+   "instrument": "short puts / put spreads",
+   "universe": "single names",
+   "n_configs": 144,
+   "promoted": 0,
+   "validated": 0,
+   "best_on_search_window": {
+    "label": "single_name/csp dte30-45 d0.15 exit0 stopNone",
+    "value": 3.90764705882353,
+    "unit": "$",
+    "n": 51,
+    "max_dd_pct": null,
+    "is_control": false
+   },
+   "control": null,
+   "beat_control": null
+  },
+  {
+   "id": "1-2b",
+   "title": "Premium selling \u2014 index ETFs",
+   "question": "Same question on index ETFs, where spreads are tighter.",
+   "instrument": "short puts / put spreads",
+   "universe": "index ETFs",
+   "n_configs": 96,
+   "promoted": 0,
+   "validated": 0,
+   "best_on_search_window": {
+    "label": "index_etf/spread w$5 risk$400 d0.20 exit7 stopNone",
+    "value": 7.864074074074072,
+    "unit": "$",
+    "n": 27,
+    "max_dd_pct": null,
+    "is_control": false
+   },
+   "control": null,
+   "beat_control": null
+  },
+  {
+   "id": "3",
+   "title": "Stock strategies",
+   "question": "If options do not pay, does a plain stock rule?",
+   "instrument": "long stock",
+   "universe": "single names",
+   "n_configs": 16,
+   "promoted": 0,
+   "validated": 0,
+   "best_on_search_window": {
+    "label": "signal=rev_1m hold=63 size=5",
+    "value": 37.9383734032541,
+    "unit": "$",
+    "n": 95,
+    "max_dd_pct": -44.9,
+    "is_control": false
+   },
+   "control": null,
+   "beat_control": null
+  },
+  {
+   "id": "5-6",
+   "title": "Iron condors",
+   "question": "Does a defined-risk, direction-neutral structure survive?",
+   "instrument": "iron condors",
+   "universe": "index ETFs",
+   "n_configs": 12,
+   "promoted": 1,
+   "validated": 0,
+   "best_on_search_window": {
+    "label": "structure=iron_condor scale=[10.0, 800.0] delta=0.2",
+    "value": 27.964705882352963,
+    "unit": "$",
+    "n": 170,
+    "max_dd_pct": null,
+    "is_control": false
+   },
+   "control": null,
+   "beat_control": null
+  },
+  {
+   "id": "8",
+   "title": "Concentration + pattern filters",
+   "question": "Does concentrating into fewer names beat the fixed $1 fee?",
+   "instrument": "long stock",
+   "universe": "single names",
+   "n_configs": 24,
+   "promoted": 0,
+   "validated": 0,
+   "best_on_search_window": {
+    "label": "signal=gap_up_not_high size=2 hold=63",
+    "value": 4981.712204644447,
+    "unit": "%",
+    "n": 38,
+    "max_dd_pct": -47.6,
+    "is_control": false
+   },
+   "control": {
+    "label": "signal=none size=5 hold=63",
+    "value": 73.92843268181494,
+    "unit": "%",
+    "n": 95,
+    "max_dd_pct": -35.3,
+    "is_control": true
+   },
+   "beat_control": true
+  },
+  {
+   "id": "9",
+   "title": "Long puts on 52-week highs",
+   "question": "Can a bought put monetise the one signal that validated?",
+   "instrument": "long puts",
+   "universe": "single names",
+   "n_configs": 18,
+   "promoted": 0,
+   "validated": 0,
+   "best_on_search_window": {
+    "label": "signal=high_and_rsi70 delta=0.3 exit=tp100",
+    "value": -18.767441860465116,
+    "unit": "$",
+    "n": 258,
+    "max_dd_pct": null,
+    "is_control": false
+   },
+   "control": {
+    "label": "signal=none delta=0.3 exit=dte21",
+    "value": 0.09855769230769275,
+    "unit": "$",
+    "n": 1040,
+    "max_dd_pct": null,
+    "is_control": true
+   },
+   "beat_control": false
+  },
+  {
+   "id": "10",
+   "title": "Unusual put volume",
+   "question": "Does the options market's own volume carry information?",
+   "instrument": "long puts",
+   "universe": "single names",
+   "n_configs": 18,
+   "promoted": 0,
+   "validated": 0,
+   "best_on_search_window": {
+    "label": "trigger=contract_vol_3x delta=0.3 exit=dte21",
+    "value": -15.172417355371897,
+    "unit": "$",
+    "n": 968,
+    "max_dd_pct": null,
+    "is_control": false
+   },
+   "control": {
+    "label": "trigger=none delta=0.3 exit=dte21",
+    "value": -24.600095238095236,
+    "unit": "$",
+    "n": 1050,
+    "max_dd_pct": null,
+    "is_control": true
+   },
+   "beat_control": true
+  },
+  {
+   "id": "11",
+   "title": "Long volatility, IV-rank gated",
+   "question": "Are options cheap when implied vol sits at its own low?",
+   "instrument": "straddles / long options",
+   "universe": "index ETFs",
+   "n_configs": 18,
+   "promoted": 0,
+   "validated": 0,
+   "best_on_search_window": {
+    "label": "regime=iv_bottom20 structure=call30 exit=expiry",
+    "value": -6.806074766355143,
+    "unit": "$",
+    "n": 428,
+    "max_dd_pct": null,
+    "is_control": false
+   },
+   "control": {
+    "label": "regime=none structure=call30 exit=expiry",
+    "value": -13.683467094703051,
+    "unit": "$",
+    "n": 1246,
+    "max_dd_pct": null,
+    "is_control": true
+   },
+   "beat_control": true
+  }
+ ],
+ "in_progress": {
+  "id": "12",
+  "title": "Short call spreads on 52-week-high names",
+  "why": "The only structure where both measured facts point the same way: option buyers overpay, AND these specific names underperform for 21 days. Every previous selling test was bullish or neutral; every buying test paid the premium.",
+  "status": "waiting on single-name CALL data (pull running)",
+  "declared_prediction": "roughly even odds"
+ },
+ "isolation_note": "Research is read-only here. No backtest module imports the journal or Supabase, so simulated history cannot reach the paper record or the go-live gate."
+}

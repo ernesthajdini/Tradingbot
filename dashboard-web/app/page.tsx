@@ -7,6 +7,13 @@ import {
 } from '@/lib/queries';
 import { MetricCard } from './components/metric-card';
 import { PnlChart } from './components/pnl-chart';
+import RESEARCH from '@/lib/research-data.json';
+
+// Pulled from the generated research export so this banner can never drift
+// from what /research actually says.
+const SINGLE_TOLL: number | null =
+  (RESEARCH as any).structural?.round_trip_toll?.find(
+    (t: any) => t.universe === 'single names')?.round_trip_pct_of_premium ?? null;
 
 // Mirrors csp_screener/account.py — $200/mo is the DEPOSIT, not the budget.
 // The risk budget is 8% of equity (playbook Section 4: caps are percentages).
@@ -89,6 +96,27 @@ export default async function DashboardPage() {
           Signals are real analysis and are tracked as paper trades — they are not orders to place.
         </div>
       </div>
+
+      {/* The gate above measures PROCESS (200 trades run cleanly). It is not
+          evidence of an edge, and the backtest programme found none. Without
+          this banner the progress bar reads as a countdown to real money,
+          which is the single most misleading thing this page could imply. */}
+      <a href="/research"
+         className="block rounded-lg border border-danger/40 bg-danger/5 p-4
+                    hover:bg-danger/10 transition-colors">
+        <div className="font-semibold text-sm">
+          🔬 {RESEARCH.totals.configs_run} backtested configurations ·{' '}
+          {RESEARCH.totals.survivors} survived validation
+        </div>
+        <div className="text-xs text-muted mt-1 max-w-3xl">
+          No strategy family tested — selling premium, buying premium, buying
+          volatility, or plain stock rules — has shown an edge after real
+          friction. The toll on single-name options is{' '}
+          {SINGLE_TOLL ? `${SINGLE_TOLL}% of premium per round trip` : 'several times'}{' '}
+          against a premium worth 3–5% a month. Reaching the gate above would
+          not change that. Read the full programme →
+        </div>
+      </a>
 
       {latest && (
         <a href={actHref} className={`block rounded-lg border-2 p-4 transition-colors ${
