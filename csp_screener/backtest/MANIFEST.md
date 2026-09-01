@@ -885,3 +885,73 @@ median, no trade above 40% of P&L, must beat its own matched control.
 Single-name CALL chains, which are NOT on disk — every single-name pull so
 far requested `right: put`. The pull runs against a subscription already paid
 for through ~25 Sep and is started now because that window closes.
+
+---
+
+# AMENDMENT 13 — is the left tail cuttable? (declared 2026-09-01, BEFORE running)
+
+## What prompted it
+
+The owner looked at the live Learning page and pointed at the greens. He is
+right about the greens, and the arithmetic is worth writing down:
+
+  13 winning tickers  +$223.52
+   3 losing tickers   -$220.27   (of which BB alone is -$189.51)
+  ------------------------------
+  net                   +$3.25   over 24 trades = +$0.14/trade
+                                 (-$77.38 at the pessimistic band)
+
+Thirteen winners were erased by ONE trade. That is not a contradiction of the
+research — it is a 24-trade instance of exactly what 346 configurations found:
+win often, win small, lose rarely, lose everything.
+
+But it reframes the question usefully. Every prior amendment asked "does this
+strategy make money?" and got no. The right next question is narrower and has
+never been asked here: **is the loss concentrated in a tail, and is that tail
+removable by a rule available BEFORE entry?**
+
+## Why this is newly answerable
+
+Every earlier run was stamped `earnings_gate: unavailable` — the historical
+calendar did not exist, so production's earnings blackout could not be
+replayed. The ThetaData pull captured **107,940 earnings dates across 3,167
+tickers**, dense from 2014. That gate can now be tested for the first time,
+and it is the single most plausible tail-cutter for short puts, which blow up
+on earnings gaps.
+
+## A. Declared space (12 configurations)
+
+| knob | values |
+|---|---|
+| earnings blackout | none (CONTROL) ; skip if earnings falls before EXPIRY ; skip if earnings falls before the 21-DTE exit |
+| short-leg delta | 0.25 ; 0.30 |
+| exit | 21 DTE ; hold to expiry |
+
+Structure fixed at short puts, single names, 25-45 DTE, production liquidity
+gates, two-sided quotes required. The blackout uses ONLY the calendar as it
+would have been known at entry — earnings dates are published in advance, so
+this is a legitimate pre-entry filter and not post-hoc surgery.
+
+## B. Also reported (descriptive, not a configuration)
+
+A tail decomposition of the CONTROL arm: what share of gross loss comes from
+the worst 1%, 5% and 10% of trades, and what fraction of those worst trades
+had an earnings event inside the holding period. This is a measurement, not a
+search, and is reported whatever it shows.
+
+## C. Discipline
+
+TRAIN 2017-02-08..2021-12-31; VALIDATE 2022-2023 on promotion; SEALED 2024+
+shut. Promotion needs n >= 100, positive mean at the PESSIMISTIC band,
+positive median, no trade above 40% of total P&L, and beating its own control.
+
+## D. Stated in advance
+
+The blackout removes trades, so it will mechanically shrink the sample and
+almost certainly improve the average — that alone proves nothing. The test is
+whether it beats its matched control on the SAME dates, and whether anything
+survives validation. The honest prior: earnings explain some of the tail but
+not most of it, because a short put's worst outcomes are broad market gaps
+(Feb 2018, Mar 2020) which no single-name calendar can dodge. If the tail is
+mostly market-wide, it is not cuttable at this account size and that closes
+the question properly rather than by assertion.
