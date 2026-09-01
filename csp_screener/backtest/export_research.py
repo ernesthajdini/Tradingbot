@@ -57,6 +57,10 @@ AMENDMENTS = [
      "question": "Does the options market's own volume carry information?",
      "instrument": "long puts", "universe": "single names",
      "files": ["volsignal_study.json"], "arm": "trigger"},
+    {"id": "13", "title": "Earnings blackout — can the tail be cut?",
+     "question": "The wins are real; can the rare disasters be filtered at entry?",
+     "instrument": "short puts", "universe": "single names",
+     "files": ["tail_study.json"], "arm": "blackout"},
     {"id": "11", "title": "Long volatility, IV-rank gated",
      "question": "Are options cheap when implied vol sits at its own low?",
      "instrument": "straddles / long options", "universe": "index ETFs",
@@ -148,6 +152,12 @@ def main() -> int:
     structural = (json.loads(fm.read_text(encoding="utf-8"))
                   if fm.exists() else None)
 
+    # Where the losses actually live. This is the answer to "look at all the
+    # greens": the wins are real and the tail eats them anyway.
+    ts = DATA / "tail_study.json"
+    tail = (json.loads(ts.read_text(encoding="utf-8")).get("tail_decomposition")
+            if ts.exists() else None)
+
     payload = {
         "generated": datetime.now().isoformat(timespec="seconds"),
         "totals": {
@@ -156,6 +166,7 @@ def main() -> int:
             "survivors": 0,
         },
         "structural": structural,
+        "tail": tail,
         "amendments": amendments,
         "in_progress": {
             "id": "12",

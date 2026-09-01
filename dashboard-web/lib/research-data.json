@@ -1,7 +1,7 @@
 {
- "generated": "2026-09-01T09:44:40",
+ "generated": "2026-09-01T18:50:00",
  "totals": {
-  "configs_run": 346,
+  "configs_run": 358,
   "runs_logged": 609,
   "survivors": 0
  },
@@ -94,6 +94,28 @@
     "p": 0.8065639845417731
    }
   ]
+ },
+ "tail": {
+  "gross_loss": -14694.400000000001,
+  "gross_win": 4178.4,
+  "worst_1pct": {
+   "n": 3,
+   "sum": -3079.5,
+   "share_of_gross_loss": 0.2095696319686411,
+   "earn_share": 0.3333333333333333
+  },
+  "worst_5pct": {
+   "n": 15,
+   "sum": -7097.200000000001,
+   "share_of_gross_loss": 0.4829867160278746,
+   "earn_share": 0.2
+  },
+  "worst_10pct": {
+   "n": 30,
+   "sum": -9775.4,
+   "share_of_gross_loss": 0.6652466245644598,
+   "earn_share": 0.13333333333333333
+  }
  },
  "amendments": [
   {
@@ -256,6 +278,33 @@
     "is_control": true
    },
    "beat_control": true
+  },
+  {
+   "id": "13",
+   "title": "Earnings blackout \u2014 can the tail be cut?",
+   "question": "The wins are real; can the rare disasters be filtered at entry?",
+   "instrument": "short puts",
+   "universe": "single names",
+   "n_configs": 12,
+   "promoted": 0,
+   "validated": 0,
+   "best_on_search_window": {
+    "label": "blackout=before_exit delta=0.25 exit=dte21",
+    "value": -23.607801418439713,
+    "unit": "$",
+    "n": 282,
+    "max_dd_pct": null,
+    "is_control": false
+   },
+   "control": {
+    "label": "blackout=none delta=0.25 exit=expiry",
+    "value": -20.85366666666667,
+    "unit": "$",
+    "n": 300,
+    "max_dd_pct": null,
+    "is_control": true
+   },
+   "beat_control": false
   },
   {
    "id": "11",

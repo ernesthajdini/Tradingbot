@@ -41,7 +41,8 @@ function Stat({ label, value, tone = 'text', sub }: {
 }
 
 export default function ResearchPage() {
-  const { totals, structural, amendments, in_progress, generated } = research as any;
+  const { totals, structural, tail, amendments, in_progress, generated } =
+    research as any;
   const toll = structural?.round_trip_toll ?? [];
   const decay = (structural?.signal_horizon_decay ?? []).filter(
     (d: any) => d.window === 'valid'
@@ -155,6 +156,90 @@ export default function ResearchPage() {
           </div>
         </div>
       </section>
+
+      {/* ── The greens are real. They still do not add up. ─────────────── */}
+      {tail && (
+        <section>
+          <h2 className="text-lg font-semibold">
+            Why a high win rate is not an edge
+          </h2>
+          <p className="text-sm text-muted mt-1 max-w-3xl">
+            The Learning tab shows many green tickers, and they are real. Over
+            297 backtested trades the same strategy wins{' '}
+            <strong className="text-text">69% of the time</strong> with a median
+            trade of <strong className="text-success">+$18.50</strong> — and
+            still loses <strong className="text-danger">$27.55 a trade</strong>.
+            This is where the money goes.
+          </p>
+
+          <div className="mt-4 grid sm:grid-cols-2 gap-4">
+            <div className="rounded-lg border border-border bg-panel p-4">
+              <div className="text-xs text-muted uppercase tracking-wide font-medium">
+                Gross wins
+              </div>
+              <div className="mt-1 text-2xl font-semibold text-success">
+                ${Math.abs(tail.gross_win).toLocaleString(undefined,
+                  { maximumFractionDigits: 0 })}
+              </div>
+            </div>
+            <div className="rounded-lg border border-border bg-panel p-4">
+              <div className="text-xs text-muted uppercase tracking-wide font-medium">
+                Gross losses
+              </div>
+              <div className="mt-1 text-2xl font-semibold text-danger">
+                −${Math.abs(tail.gross_loss).toLocaleString(undefined,
+                  { maximumFractionDigits: 0 })}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full text-sm border border-border rounded-lg overflow-hidden">
+              <thead className="bg-panel text-muted text-xs uppercase tracking-wide">
+                <tr>
+                  <th className="text-left px-4 py-2 font-medium">The worst…</th>
+                  <th className="text-right px-4 py-2 font-medium">Trades</th>
+                  <th className="text-right px-4 py-2 font-medium">Cost</th>
+                  <th className="text-right px-4 py-2 font-medium">Share of all losses</th>
+                  <th className="text-right px-4 py-2 font-medium">Had earnings</th>
+                </tr>
+              </thead>
+              <tbody className="font-mono">
+                {[1, 5, 10].map((pct) => {
+                  const d = tail[`worst_${pct}pct`];
+                  if (!d) return null;
+                  return (
+                    <tr key={pct} className="border-t border-border">
+                      <td className="px-4 py-2 font-sans">{pct}% of trades</td>
+                      <td className="px-4 py-2 text-right">{d.n}</td>
+                      <td className="px-4 py-2 text-right text-danger">
+                        −${Math.abs(d.sum).toLocaleString(undefined,
+                          { maximumFractionDigits: 0 })}
+                      </td>
+                      <td className="px-4 py-2 text-right font-semibold text-danger">
+                        {(d.share_of_gross_loss * 100).toFixed(0)}%
+                      </td>
+                      <td className="px-4 py-2 text-right text-muted">
+                        {(d.earn_share * 100).toFixed(0)}%
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <p className="text-sm text-muted mt-3 max-w-3xl">
+            <strong className="text-text">And the tail cannot be filtered out.</strong>{' '}
+            Earnings gaps were the most plausible cause, and 107,940 historical
+            earnings dates say otherwise: only 13–20% of the worst trades had
+            earnings in the holding period, <em>below</em> the 18% base rate.
+            Blacking earnings out made results worse (−$31.59 vs −$27.55) — it
+            removed winners, not disasters. A losing trade of this kind is not
+            bad luck that a rule can dodge; it is the price of the wins.
+          </p>
+        </section>
+      )}
 
       {/* ── The bar, and the signal that cannot clear it. ──────────────── */}
       {decay.length > 0 && (
