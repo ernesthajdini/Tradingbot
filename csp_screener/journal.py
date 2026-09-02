@@ -41,6 +41,10 @@ JOURNAL_FILES = {
     "shadow_trades": config.JOURNAL_DIR / "shadow_trades.jsonl",
     "evaluations": config.JOURNAL_DIR / "evaluations.jsonl",
     "system_events": config.JOURNAL_DIR / "system_events.jsonl",
+    # paper_orders: what the IBKR PAPER account did with each paper trade.
+    # Separate topic on purpose — the go-live gate and the evaluator only
+    # read virtual_trades, so broker fills can never alter the record.
+    "paper_orders": config.JOURNAL_DIR / "paper_orders.jsonl",
 }
 
 

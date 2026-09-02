@@ -270,3 +270,37 @@ $$ LANGUAGE sql STABLE;
 --   SELECT table_name FROM information_schema.tables WHERE table_schema = 'public';
 --   SELECT count(*) FROM public.screens;
 -- ===========================================================================
+
+
+-- ---------------------------------------------------------------------------
+-- paper_orders: what the IBKR PAPER account did with each paper trade.
+-- Written only by csp_screener/paper_broker.py (runs locally, next to TWS).
+-- Separate from virtual_trades on purpose: the go-live gate never reads it.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.paper_orders (
+    id BIGSERIAL PRIMARY KEY,
+    event TEXT NOT NULL CHECK (event IN ('submitted','repriced','filled','cancelled','rejected')),
+    trade_id TEXT NOT NULL,
+    side TEXT NOT NULL CHECK (side IN ('open','close')),
+    ticker TEXT,
+    structure TEXT,
+    expiration DATE,
+    strike NUMERIC(10, 4),
+    long_strike NUMERIC(10, 4),
+    qty INTEGER,
+    limit_per_share NUMERIC(10, 4),        -- IBKR sign convention (bags negative = credit)
+    journal_price_dollars NUMERIC(12, 2),  -- what the paper journal recorded
+    ibkr_order_id BIGINT DEFAULT 0,
+    ibkr_perm_id BIGINT,
+    account TEXT,                          -- always DU… (paper) by construction
+    fill_per_share NUMERIC(10, 4),
+    fill_dollars NUMERIC(12, 2),
+    commission NUMERIC(10, 4),
+    slippage_dollars NUMERIC(12, 2),       -- positive = broker worse than paper
+    status_text TEXT,
+    at TIMESTAMPTZ,
+    record_hash TEXT,
+    recorded_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (trade_id, side, event, ibkr_order_id)
+);
+CREATE INDEX IF NOT EXISTS idx_po_trade ON public.paper_orders(trade_id);

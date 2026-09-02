@@ -300,8 +300,32 @@ def push_system_event(record: dict) -> bool:
 # Topic dispatch (called by journal.append)
 # ---------------------------------------------------------------------------
 
+def push_paper_order(record: dict) -> bool:
+    """Append-only mirror of the IBKR paper broker's events. Idempotent on
+    (trade_id, side, event, ibkr_order_id) so a re-run never duplicates."""
+    client = _get_client()
+    if client is None:
+        return False
+    try:
+        row = {k: record.get(k) for k in (
+            "event", "trade_id", "side", "ticker", "structure", "expiration",
+            "strike", "long_strike", "qty", "limit_per_share",
+            "journal_price_dollars", "ibkr_order_id", "ibkr_perm_id", "account",
+            "fill_per_share", "fill_dollars", "commission", "slippage_dollars",
+            "status_text", "at", "record_hash", "recorded_at")}
+        row = {k: v for k, v in _json_safe(row).items() if v is not None}
+        client.table("paper_orders").upsert(
+            row, on_conflict="trade_id,side,event,ibkr_order_id").execute()
+        return True
+    except Exception as e:
+        logger.warning(f"Supabase push_paper_order failed: {e}")
+        return False
+
+
 def push(topic: str, record: dict) -> bool:
     """Dispatch by topic name. Returns True if pushed."""
+    if topic == "paper_orders":
+        return push_paper_order(record)
     if topic == "screens":
         return push_screen(record)
     if topic == "virtual_trades":
