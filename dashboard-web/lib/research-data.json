@@ -1,7 +1,7 @@
 {
- "generated": "2026-09-01T18:50:00",
+ "generated": "2026-09-02T12:31:49",
  "totals": {
-  "configs_run": 358,
+  "configs_run": 366,
   "runs_logged": 609,
   "survivors": 0
  },
@@ -307,6 +307,33 @@
    "beat_control": false
   },
   {
+   "id": "14",
+   "title": "Earnings IV crush, defined risk",
+   "question": "Is the 2-session crush the one prize bigger than the toll?",
+   "instrument": "short put spreads / condors",
+   "universe": "single names",
+   "n_configs": 8,
+   "promoted": 0,
+   "validated": 0,
+   "best_on_search_window": {
+    "label": "arm=earnings structure=put_spread delta=0.2 width=5.0",
+    "value": -65.83571428571427,
+    "unit": "$",
+    "n": 14,
+    "max_dd_pct": null,
+    "is_control": false
+   },
+   "control": {
+    "label": "arm=control structure=put_spread delta=0.2 width=5.0",
+    "value": -45.79,
+    "unit": "$",
+    "n": 10,
+    "max_dd_pct": null,
+    "is_control": true
+   },
+   "beat_control": false
+  },
+  {
    "id": "11",
    "title": "Long volatility, IV-rank gated",
    "question": "Are options cheap when implied vol sits at its own low?",
@@ -334,12 +361,21 @@
    "beat_control": true
   }
  ],
- "in_progress": {
-  "id": "12",
-  "title": "Short call spreads on 52-week-high names",
-  "why": "The only structure where both measured facts point the same way: option buyers overpay, AND these specific names underperform for 21 days. Every previous selling test was bullish or neutral; every buying test paid the premium.",
-  "status": "waiting on single-name CALL data (pull running)",
-  "declared_prediction": "roughly even odds"
- },
+ "in_progress": [
+  {
+   "id": "12",
+   "title": "Short call spreads on 52-week-high names",
+   "why": "The only structure where both measured facts point the same way: option buyers overpay, AND these specific names underperform for 21 days. Every previous selling test was bullish or neutral; every buying test paid the premium.",
+   "status": "single-name CALL pull running; store build and study chained to follow unattended",
+   "declared_prediction": "roughly even odds"
+  },
+  {
+   "id": "14A",
+   "title": "Earnings IV crush on liquid names, defined risk",
+   "why": "The one selling context where the prize per round trip (a 20-40% vol collapse in two sessions) plausibly exceeds the toll. The archive covers only 27% of earnings events and none of the liquid large caps, so a targeted pull of 316 names / 7,602 events is queued with its own stores.",
+   "status": "queued behind Amendment 12's pulls (~11h of requests)",
+   "declared_prediction": "worse than even \u2014 the covered slice showed no crush signal even at mid fills"
+  }
+ ],
  "isolation_note": "Research is read-only here. No backtest module imports the journal or Supabase, so simulated history cannot reach the paper record or the go-live gate."
 }

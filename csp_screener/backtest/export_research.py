@@ -172,17 +172,28 @@ def main() -> int:
         "structural": structural,
         "tail": tail,
         "amendments": amendments,
-        "in_progress": {
-            "id": "12",
-            "title": "Short call spreads on 52-week-high names",
-            "why": ("The only structure where both measured facts point the "
-                    "same way: option buyers overpay, AND these specific "
-                    "names underperform for 21 days. Every previous selling "
-                    "test was bullish or neutral; every buying test paid the "
-                    "premium."),
-            "status": "waiting on single-name CALL data (pull running)",
-            "declared_prediction": "roughly even odds",
-        },
+        "in_progress": [
+            {"id": "12",
+             "title": "Short call spreads on 52-week-high names",
+             "why": ("The only structure where both measured facts point the "
+                     "same way: option buyers overpay, AND these specific "
+                     "names underperform for 21 days. Every previous selling "
+                     "test was bullish or neutral; every buying test paid the "
+                     "premium."),
+             "status": "single-name CALL pull running; store build and study "
+                       "chained to follow unattended",
+             "declared_prediction": "roughly even odds"},
+            {"id": "14A",
+             "title": "Earnings IV crush on liquid names, defined risk",
+             "why": ("The one selling context where the prize per round trip "
+                     "(a 20-40% vol collapse in two sessions) plausibly exceeds "
+                     "the toll. The archive covers only 27% of earnings events "
+                     "and none of the liquid large caps, so a targeted pull of "
+                     "316 names / 7,602 events is queued with its own stores."),
+             "status": "queued behind Amendment 12's pulls (~11h of requests)",
+             "declared_prediction": ("worse than even — the covered slice showed "
+                                     "no crush signal even at mid fills")},
+        ],
         "isolation_note": ("Research is read-only here. No backtest module "
                            "imports the journal or Supabase, so simulated "
                            "history cannot reach the paper record or the "

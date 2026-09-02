@@ -357,22 +357,23 @@ export default function ResearchPage() {
       </section>
 
       {/* ── What is still open. ────────────────────────────────────────── */}
-      {in_progress && (
-        <section className="rounded-lg border border-accent/40 bg-accent/5 p-5">
+      {(in_progress ?? []).map((ip: any) => (
+        <section key={ip.id}
+                 className="rounded-lg border border-accent/40 bg-accent/5 p-5">
           <div className="flex items-baseline gap-2 flex-wrap">
             <span className="text-xs font-mono text-accent">
-              AMENDMENT {in_progress.id}
+              AMENDMENT {ip.id}
             </span>
-            <span className="font-semibold">{in_progress.title}</span>
+            <span className="font-semibold">{ip.title}</span>
           </div>
-          <p className="text-sm text-muted mt-2 max-w-3xl">{in_progress.why}</p>
+          <p className="text-sm text-muted mt-2 max-w-3xl">{ip.why}</p>
           <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted">
-            <span>Status: <span className="text-text">{in_progress.status}</span></span>
+            <span>Status: <span className="text-text">{ip.status}</span></span>
             <span>Declared before the data exists: <span className="text-text">
-              {in_progress.declared_prediction}</span></span>
+              {ip.declared_prediction}</span></span>
           </div>
         </section>
-      )}
+      ))}
 
       <p className="text-xs text-muted">
         {research.isolation_note} Generated {new Date(generated).toLocaleString()} by{' '}
