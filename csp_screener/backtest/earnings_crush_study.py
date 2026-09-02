@@ -53,12 +53,6 @@ CONTROL_OFFSET_DAYS = 30
 CONTROL_MIN_GAP_DAYS = 10             # control entry must sit away from any earnings
 FILL = "cross"                        # "mid" = diagnostic only, never promotable
 
-try:
-    from csp_screener.backtest.build_call_store import CALL_STORE
-    if CALL_STORE.is_dir() and any(CALL_STORE.iterdir()):
-        STRUCTURES.append("condor")
-except Exception:
-    pass
 
 
 def pick_put_spread(rows, t, asof, target, width):
@@ -250,12 +244,22 @@ def show(tag, r):
 
 
 def main() -> int:
+    import argparse
+    from csp_screener.backtest.build_call_store import CALL_STORE
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--store", default=str(STORE))
+    ap.add_argument("--call-store", default=str(CALL_STORE))
+    ap.add_argument("--tag", default="archive")
+    a = ap.parse_args()
     t0 = time.time()
-    store = DayStore(STORE)
+    store = DayStore(Path(a.store))
     cstore = None
-    if "condor" in STRUCTURES:
-        from csp_screener.backtest.build_call_store import CALL_STORE
-        cstore = DayStore(CALL_STORE)
+    cs = Path(a.call_store)
+    if cs.is_dir() and any(cs.iterdir()):
+        cstore = DayStore(cs)
+        STRUCTURES.append("condor")
+    print(f"put store: {a.store}")
+    print(f"call store: {a.call_store if cstore else '(none)'}")
     print(f"structures runnable: {STRUCTURES}")
     earn = load_earnings()
     tk = set()
@@ -317,7 +321,7 @@ def main() -> int:
             print(f"    control ${cv['mean']:.2f} -> "
                   f"{'HOLDS' if lo > 0 and v['mean'] > cv['mean'] else 'fails'}")
 
-    out = DATA / "earnings_crush_study.json"
+    out = DATA / f"earnings_crush_study_{a.tag}.json"
     out.write_text(json.dumps(
         {"generated": datetime.now().isoformat(), "structures": STRUCTURES,
          "results": [{k: ({kk: vv for kk, vv in val.items() if kk != "pnls"}

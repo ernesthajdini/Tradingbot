@@ -1014,3 +1014,38 @@ $2-5 defined risk the tail is capped, which is the point of the structure.
 Prior: better than even odds gross of friction, close to even net of the
 pessimistic band. This is the most promising untested idea in the project,
 and it is written down as such BEFORE the number exists.
+
+## Amendment 14A — the archive cannot test this; a targeted pull is declared (2026-09-02)
+
+**Coverage finding.** The put-spread arm ran on the archive and returned
+n=14-31 per cell. A funnel on 600 events explains why: 437 died because the
+ticker is not in the store on the entry date at all. The archive was pulled
+for the 25-45 DTE monthly strategy on the screener's own candidate windows;
+it covers ~27% of earnings events and none of the liquid large caps where
+the crush is documented. A further 69 failed the OI gate because the archive
+mop-up ran without OI files (unknown reads as zero).
+
+**Diagnostic on the covered slice (NOT a promotable configuration — fills at
+MID both ways, zero slippage, run only to separate the crush signal from the
+crossing toll):** the earnings arm still LOST (-$30 to -$39/trade) and lost
+MORE than its mid-quarter control (-$2 to -$15). Eight of eight comparisons
+point the wrong way. On this slice there is no crush signal at all, before any
+friction.
+
+**Why the pull is still declared.** The slice is small and biased toward the
+exact names where the crush is known to be weak — high realized-vol picks
+whose earnings moves tend to exceed what is implied. Closing a documented
+effect on n=30 of the wrong names would be the same error as opening one on
+n=30 of the right ones. The pull targets ~480 names with average volume >=
+3M and price >= $10, every earnings date 2017-02..2023-12, the nearest 7-30
+DTE expiry at E-1 (event) and at E-31 (matched control), puts + calls + open
+interest: ~8 requests per event, ~10 hours after the Amendment 12 pulls
+release the 4-worker allowance. It writes to its own `options_earn/` tree
+and its own stores; nothing in the archive is modified.
+
+**Prior, revised downward and stated before the data exists:** the covered
+slice makes a positive result LESS likely than it was when Amendment 14 was
+declared. If the liquid-name sample also shows earnings <= control at mid
+fills, the crush is not harvestable at retail friction on this data and
+Amendment 14 closes — which would exhaust every mechanism-motivated option
+idea in this project except Amendment 12, still queued.

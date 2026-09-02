@@ -82,11 +82,11 @@ def call_delta(S, K, T, sigma):
     return out
 
 
-def load_calls(tickers):
+def load_calls(tickers, options_subdir="options"):
     """Same normalized frame as the put loader, from calls_<EXP>.csv."""
     frames = []
     for ticker in tickers:
-        tdir = DATA / "options" / ticker
+        tdir = DATA / options_subdir / ticker
         stock_csv = DATA / "stocks" / f"{ticker}.csv"
         if not tdir.is_dir() or not stock_csv.exists():
             continue
@@ -138,8 +138,8 @@ def load_calls(tickers):
     return pd.concat(frames, ignore_index=True)[data_loader.NORMALIZED_COLUMNS]
 
 
-def build(store: Path = CALL_STORE) -> dict:
-    opt_root = DATA / "options"
+def build(store: Path = CALL_STORE, options_subdir: str = "options") -> dict:
+    opt_root = DATA / options_subdir
     tickers = sorted(p.name for p in opt_root.iterdir()
                      if p.is_dir() and any(p.glob("calls_*.csv")))
     store.mkdir(parents=True, exist_ok=True)
@@ -147,7 +147,7 @@ def build(store: Path = CALL_STORE) -> dict:
     stats = {"tickers": 0, "rows": 0, "batches": 0}
     for start in range(0, len(tickers), BATCH_TICKERS):
         batch = tickers[start:start + BATCH_TICKERS]
-        frame = load_calls(batch)
+        frame = load_calls(batch, options_subdir)
         if frame.empty:
             continue
         qd = pd.to_datetime(frame["quote_date"])
@@ -183,10 +183,15 @@ def build(store: Path = CALL_STORE) -> dict:
 
 
 if __name__ == "__main__":
+    import argparse
     from csp_screener.backtest.day_store import DayStore
-    print("Building CALL day store...")
-    s = build()
-    ds = DayStore(CALL_STORE)
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--options-subdir", default="options")
+    ap.add_argument("--store", default=str(CALL_STORE))
+    a = ap.parse_args()
+    print(f"Building CALL day store from {a.options_subdir}...")
+    s = build(Path(a.store), a.options_subdir)
+    ds = DayStore(Path(a.store))
     print(f"CALL STORE BUILT: {s}")
     if ds.dates:
         print(f"{len(ds.dates)} trading days ({ds.dates[0]} -> {ds.dates[-1]})")
