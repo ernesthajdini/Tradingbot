@@ -92,7 +92,7 @@ def pull_ticker(sym: str, intervals: list[list[str]]) -> dict:
     tdir = OUT / sym
     tdir.mkdir(parents=True, exist_ok=True)
     done_marker = tdir / ".complete_calls"
-    counts = {"puts": 0, "oi": 0, "skip": 0, "empty": 0, "fail": 0}
+    counts = {"calls": 0, "skip": 0, "empty": 0, "fail": 0}
     if done_marker.exists():
         counts["skip"] = 1
         return counts
@@ -172,16 +172,27 @@ def main() -> int:
         return sum((date.fromisoformat(b) - date.fromisoformat(a)).days + 1
                    for a, b in iv)
     work = dict(sorted(work.items(), key=lambda kv: -_days(kv[1])))
-    log = open(DATA / "options_pull.log", "a", encoding="utf-8", buffering=1)
+    log = open(DATA / "calls_pull.log", "a", encoding="utf-8", buffering=1)
     print(f"{len(work)} member tickers to pull (oi={'on' if PULL_OI else 'OFF'})",
           file=log)
-    totals = {"puts": 0, "oi": 0, "skip": 0, "empty": 0, "fail": 0}
+    totals = {"calls": 0, "skip": 0, "empty": 0, "fail": 0, "crashed": 0}
     t0 = time.time()
     done = 0
     with ThreadPoolExecutor(WORKERS) as ex:
         futures = {ex.submit(pull_ticker, s, iv): s for s, iv in work.items()}
         for fut in as_completed(futures):
-            c = fut.result()
+            # One bad ticker must not kill a multi-day job (the first run of
+            # this script died on exactly that). Tier walls stay fatal: they
+            # mean the subscription is wrong, and every request after one is
+            # wasted quota.
+            try:
+                c = fut.result()
+            except RuntimeError:
+                raise                       # TIER WALL — stop everything
+            except Exception as e:
+                totals["crashed"] += 1
+                print(f"CRASH {futures[fut]}: {e!r}", file=log)
+                c = {}
             for k in totals:
                 totals[k] += c.get(k, 0)
             done += 1
