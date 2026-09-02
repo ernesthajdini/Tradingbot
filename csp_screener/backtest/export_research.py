@@ -61,6 +61,10 @@ AMENDMENTS = [
      "question": "The wins are real; can the rare disasters be filtered at entry?",
      "instrument": "short puts", "universe": "single names",
      "files": ["tail_study.json"], "arm": "blackout"},
+    {"id": "14", "title": "Earnings IV crush, defined risk",
+     "question": "Is the 2-session crush the one prize bigger than the toll?",
+     "instrument": "short put spreads / condors", "universe": "single names",
+     "files": ["earnings_crush_study.json"], "arm": "arm"},
     {"id": "11", "title": "Long volatility, IV-rank gated",
      "question": "Are options cheap when implied vol sits at its own low?",
      "instrument": "straddles / long options", "universe": "index ETFs",
@@ -111,7 +115,7 @@ def load_amendment(a):
                        "max_dd_pct": (round(100 * float(dd), 1)
                                       if dd is not None else None),
                        "is_control": bool(a["arm"] and
-                                          c.get(a["arm"]) == "none")})
+                                          c.get(a["arm"]) in ("none", "control"))})
     if not scored:
         return None
 
