@@ -955,3 +955,62 @@ not most of it, because a short put's worst outcomes are broad market gaps
 (Feb 2018, Mar 2020) which no single-name calendar can dodge. If the tail is
 mostly market-wide, it is not cuttable at this account size and that closes
 the question properly rather than by assertion.
+
+---
+
+# AMENDMENT 14 — earnings IV crush, defined risk (declared 2026-09-02, BEFORE running)
+
+## Why this is different in kind from Amendments 1-6 and 13
+
+Every premium-selling test so far harvested the MONTHLY variance risk
+premium: 3-5% of premium per month against a round-trip toll of 13.9% on
+single names. That ratio is why they all died, and no entry filter changes
+it — Amendment 13 proved the tail is not cuttable.
+
+The earnings crush is a different prize. Implied vol on a name collapses
+20-40% across the announcement, in about two sessions. It is the one
+premium-selling context where the prize per round trip plausibly exceeds
+the toll. Amendment 13 also showed, in passing, that trades holding through
+earnings were UNDER-represented in the worst tail (13-20% vs an 18% base
+rate). Nobody has tested harvesting the crush directly.
+
+Weeklies exist in the store for liquid names (DTEs 9, 16, 23, 30 observed),
+so a short-dated structure is available. The hard rule against 0DTE stands:
+the nearest expiry with at least 7 days to run is used.
+
+## A. Declared space (16 configurations; 8 runnable today)
+
+| knob | values |
+|---|---|
+| arm | earnings (enter close of the session BEFORE the date, exit close of the session AFTER — spans the event whether it reports pre- or post-market) ; CONTROL (same ticker, same structure, entered 30 calendar days earlier, i.e. mid-quarter, same 2-session hold) |
+| structure | short put spread (runnable now) ; iron condor (needs the call store — runs when Amendment 12's chain has built it) |
+| short-leg delta | 0.20 ; 0.30 |
+| width | $2 ; $5 |
+
+Expiry: nearest with 7 <= DTE <= 30 at entry. Both legs two-sided; short
+leg OI >= 500; never sell in the money; credit >= $0.10. At most 5 events per
+session, drawn at random, so earnings-season clusters cannot dominate.
+Collateral (width x 100) capped at $600.
+
+Friction: $1.00 per contract per leg each way (put spread = 4, condor = 8),
+plus 5%/10% slippage on credit and buyback. Unquotable exits settle at
+intrinsic, which for a SELLER is the conservative direction.
+
+## B. Discipline
+
+TRAIN 2017-02-08..2021-12-31; VALIDATE 2022-2023 on promotion; SEALED 2024+
+shut. Promotion needs n >= 100, positive mean at the PESSIMISTIC band,
+positive median, no trade above 40% of total P&L, and beating its matched
+control. The control is the whole test: a 2-session short spread earns
+theta anywhere; only the EXCESS over mid-quarter is the crush.
+
+## C. Stated in advance
+
+The put-spread arm carries a bullish tilt alongside the crush, so it can
+win for the wrong reason in a rising market; the condor arm is the clean
+test and it is not runnable until the call store exists. The known failure
+mode is the blowout — a name that moves twice its implied move — and with
+$2-5 defined risk the tail is capped, which is the point of the structure.
+Prior: better than even odds gross of friction, close to even net of the
+pessimistic band. This is the most promising untested idea in the project,
+and it is written down as such BEFORE the number exists.
