@@ -1,16 +1,14 @@
 #!/usr/bin/env bash
-# AMENDMENT 14A — unattended: wait for the Amendment 12 pulls to release the
-# 4-worker allowance, then pull earnings chains for liquid names, build the
-# earnings-specific put and call stores, run the pre-registered study.
+# AMENDMENT 14A — unattended: after the call mirror pull releases the 4-worker
+# allowance, pull earnings chains for liquid names, build the earnings-specific
+# put and call stores, run the pre-registered study.
 set -u
 cd "$(dirname "$0")/../.."
 D=csp_screener/backtest/data/thetadata_full
 L=$D/a14_chain.log
-echo "[$(date)] waiting for calls_pull.py / calls_oi_pull.py to finish" > $L
-while ps -ef 2>/dev/null | grep -qE "[c]alls_pull\.py|[c]alls_oi_pull\.py"; do sleep 180; done
-# the a12 chain starts the OI pull only after the EOD pull; give it time to appear
-sleep 240
-while ps -ef 2>/dev/null | grep -qE "[c]alls_pull\.py|[c]alls_oi_pull\.py"; do sleep 180; done
+echo "[$(date)] waiting for the call mirror pull to finish" > $L
+sleep 90
+while ps -ef 2>/dev/null | grep -qE "[c]alls_mirror_pull\.py|[c]alls_pull\.py|[c]alls_oi_pull\.py"; do sleep 180; done
 echo "[$(date)] allowance free" >> $L
 
 echo "[$(date)] stage 1: earnings chains pull" >> $L
