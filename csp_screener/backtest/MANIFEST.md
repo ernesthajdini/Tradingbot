@@ -1049,3 +1049,82 @@ declared. If the liquid-name sample also shows earnings <= control at mid
 fills, the crush is not harvestable at retail friction on this data and
 Amendment 14 closes — which would exhaust every mechanism-motivated option
 idea in this project except Amendment 12, still queued.
+
+---
+
+# AMENDMENT 15 — the wheel (declared 2026-09-02, BEFORE running)
+
+## The owner's question
+
+"Can we shift this whole product into the wheel?" — sell cash-secured puts,
+take assignment, sell covered calls until called away, repeat. It is the most
+popular retail premium strategy and it deserves a measured answer, not an
+opinion.
+
+## What is known before running
+
+**By put-call parity, long 100 shares + short call = short put.** The wheel
+is "always short a put on the name, sometimes synthetically." It does not
+escape the toll-vs-prize arithmetic that closed 366 configurations; it
+changes what is held while the toll is paid, and adds a phase no put seller
+enters — holding assigned stock through a drawdown while selling calls that
+may sit below cost basis (the classic wheel trap).
+
+**Capital.** Assignment means owning 100 shares. At $1,200 the wheel is
+confined to names priced <= $12. Measured on the put store (0.25-0.45 delta,
+20-60 DTE, OI >= 100, 2017-2023):
+
+| underlying | median spread on mid | round-trip toll |
+|---|---|---|
+| <= $12 | $0.10 on $0.62 | **19.2% of premium** |
+| $12-25 | $0.15 on $1.10 | 15.5% |
+| $25-50 | $0.15 on $1.45 | 11.7% |
+| > $50 | $0.20 on $2.10 | 10.5% |
+
+The names this account can wheel carry the WORST toll in the market. This is
+recorded before the study runs so the result cannot be accused of being fit
+to it.
+
+## A. Declared space (8 configurations + matched controls)
+
+| knob | values |
+|---|---|
+| price cap (what the account can be assigned) | <= $12 (this account) ; <= $50 (a ~$5,000 account) |
+| put exit | hold to expiry, accept assignment (classic) ; take profit at 50% of credit, else hold to expiry and accept assignment |
+| covered-call rule while holding stock | strike at or above cost basis, else sit uncovered that cycle ; 0.30-delta call regardless of basis |
+
+Fixed: 0.30-delta puts, 25-45 DTE, both legs two-sided, OI >= 500 on every
+sold contract, production liquidity gates, delisted names included. A wheel
+CYCLE is put -> (assignment -> covered calls)* -> called away, or put expiring
+worthless. A cycle held in stock beyond 365 days, or whose name delists, is
+liquidated at the last price and counted — the wheel's stuck positions are
+part of its record, not an exclusion.
+
+**Control, per cycle:** buy-and-hold 100 shares of the SAME name from the
+SAME entry day for the SAME duration. That is the wheel's honest benchmark —
+it is long-stock exposure with capped upside, so it must beat owning the
+stock outright to justify the option legs and their toll.
+
+Two accountings are reported: per-cycle expectancy across all names (the
+statistical test), and a single-slot $1,200 account running one wheel at a
+time (the product question). Neither is the other.
+
+## B. Discipline
+
+TRAIN 2017-02-08..2021-12-31; VALIDATE 2022-2023 on promotion; SEALED 2024+
+shut. Promotion needs n >= 100 cycles, positive mean at the PESSIMISTIC band,
+positive median, no cycle above 40% of total P&L, and beating buy-and-hold.
+
+## C. Stated in advance
+
+Prior: the wheel inherits the short-put expectancy (-$27.55/trade on 297
+trades at this delta and tenor) and adds the stock-holding phase, whose cost
+is concentrated in 2018Q4, March 2020 and 2022 — exactly the periods in the
+train and validation windows. Expected: per-cycle mean negative at the
+pessimistic band; the <= $12 arm worst; single-slot equity curve below
+$1,200 at the end of train. If the wheel BEATS buy-and-hold on the <= $50
+cap, that is a finding about a larger account, not this one, and will be
+reported as such.
+
+Data: the covered-call leg needs the single-name CALL store Amendment 12 is
+building. This study is chained to run when it exists.
