@@ -272,11 +272,13 @@ def main() -> int:
     print(f"{len(sig)} eligibility panels ({(time.time()-t0)/60:.1f}min)\n")
 
     w = (date(2018, 1, 1), date(2018, 12, 31))
-    a = run("earnings", "put_spread", 0.30, 5.0, store, cstore, sig, earn, w)
-    b = run("control", "put_spread", 0.30, 5.0, store, cstore, sig, earn, w)
-    bites = a and b and (a["n"], round(a["mean"], 4)) != (b["n"], round(b["mean"], 4))
-    print(f"KNOB PROOF arm: earnings n={a['n'] if a else 0} vs control "
-          f"n={b['n'] if b else 0} -> {'BITES' if bites else 'INERT — ABORT'}")
+    probe_e = run("earnings", "put_spread", 0.30, 5.0, store, cstore, sig, earn, w)
+    probe_c = run("control", "put_spread", 0.30, 5.0, store, cstore, sig, earn, w)
+    bites = (probe_e and probe_c
+             and (probe_e["n"], round(probe_e["mean"], 4))
+             != (probe_c["n"], round(probe_c["mean"], 4)))
+    print(f"KNOB PROOF arm: earnings n={probe_e['n'] if probe_e else 0} vs control "
+          f"n={probe_c['n'] if probe_c else 0} -> {'BITES' if bites else 'INERT — ABORT'}")
     if not bites:
         return 1
 
