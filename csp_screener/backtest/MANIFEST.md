@@ -1128,3 +1128,47 @@ reported as such.
 
 Data: the covered-call leg needs the single-name CALL store Amendment 12 is
 building. This study is chained to run when it exists.
+
+## Amendment 16A — deadline scope cut, declared 2026-09-21 BEFORE any result
+
+Operational, not methodological. Three facts forced it:
+
+1. The machine rebooted on 15 Sep at 23:49, ~7h after the pull started. That
+   is the THIRD pull killed by a reboot. Surviving data: AAPL, MSFT, NVDA
+   complete-ish; AMZN partial; GOOGL barely started.
+2. The ThetaData subscription lapses ~25 Sep — four days.
+3. At the observed rate (~440 files/hour, 4 workers) the original four-endpoint
+   pull needed ~12 days.
+
+**Cut: puts and put open interest only; the call endpoints are dropped.**
+Amendment 16's declared space is short puts and short PUT spreads, so no call
+leg was ever read by it. This halves the requests (~47h for all 40 tickers)
+and changes NOTHING about the declared configurations, universe, splits,
+promotion rule or controls. Calls already on disk for AAPL/MSFT/NVDA/AMZN
+stay and remain usable by any later amendment.
+
+The universe is NOT narrowed and NOT reordered. Had it needed narrowing, the
+rule would have been "the first N of the frozen list" — an ordering fixed
+before any data existed — never a choice informed by which names look good.
+
+A watchdog now restarts the terminal and the pull if either dies. It cannot
+survive a reboot; only a startup task could, and that is the owner's call.
+
+## Note on NVDA, 2026-09-16 — a review, not an amendment
+
+The owner submitted a rule-based CSP spec (ATM-straddle expected move ->
+downside reference -> strike at or below it, 3-10 DTE, earnings excluded) and
+asked for a review. It was run against real NVDA chains 2019-2023 as a REVIEW
+HARNESS (`nvda_spec_review.py`), outside the pre-registration framework: one
+ticker, no train/validate split, no promotion. It is not evidence and is not
+counted in the configuration total.
+
+What it showed: the rule selects a 0.191-delta put (5.25% OTM) — genuinely
+conservative and working as designed. 197 trades, 87.3% wins, +$8,623 at
+crossing fills, ~8.8%/yr on collateral, worst trade -$3,898, 13.2% assigned,
+2022 negative. The same collateral simply held in NVDA returned +1,354%.
+
+⚠️ Before a split guard was added, the harness reported -$48,839 and a
+catastrophic 2021. That was NVDA's 4:1 split on 2021-07-20 — a pre-split
+strike marked against a post-split spot. Any future single-name harness must
+drop positions spanning a split; the archive stores as-traded strikes.

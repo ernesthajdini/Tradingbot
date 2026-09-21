@@ -44,10 +44,13 @@ UNIVERSE = [
     "BABA",
 ]
 
+# SCOPE CUT 2026-09-21, deadline-driven, NOT a change to the declared space:
+# Amendment 16 tests short puts and short PUT spreads only, so the call legs
+# were never needed by it. Dropping them halves the requests and is what
+# makes the 40-ticker universe reachable before the subscription lapses on
+# ~25 Sep. Calls already pulled (AAPL/MSFT/NVDA/AMZN) stay on disk.
 ENDPOINTS = [("puts", "/v3/option/history/eod", "put"),
-             ("calls", "/v3/option/history/eod", "call"),
-             ("oi", "/v3/option/history/open_interest", "put"),
-             ("oi_calls", "/v3/option/history/open_interest", "call")]
+             ("oi", "/v3/option/history/open_interest", "put")]
 
 
 def pull_ticker(sym: str) -> dict:
