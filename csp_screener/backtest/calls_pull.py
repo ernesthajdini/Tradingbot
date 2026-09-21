@@ -63,6 +63,15 @@ def _get(path: str, params: dict, sym: str) -> str | None:
                 raise RuntimeError(f"TIER WALL on {sym}: {text[:160]}")
             if low.startswith("symbol") or low.startswith("created"):
                 return text
+            # A poisoned session ("Invalid session ID. This can occur if more
+            # than one terminal is running.") used to fall into the "invalid"
+            # bucket below and be returned as NO DATA. That silently turned
+            # every symbol into "has no options" and marked 32 tickers
+            # complete with zero rows. A session error is a HARD failure.
+            if "invalid session" in low or "session id" in low:
+                raise RuntimeError(
+                    f"THETA SESSION INVALID on {sym} — more than one terminal "
+                    f"is running, or the terminal needs a restart: {text[:120]}")
             if "no data" in low or "not found" in low or "invalid" in low:
                 return ""
             return ""

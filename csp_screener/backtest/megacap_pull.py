@@ -63,8 +63,15 @@ def pull_ticker(sym: str) -> dict:
         return counts
 
     text = _get("/v3/option/list/expirations", {"symbol": sym}, sym)
+    if text is None:
+        # HARD FAILURE (terminal down/slow) — must NOT be recorded as done.
+        # The first version touched the marker here, so ~30 tickers were
+        # silently marked COMPLETE with zero data while the terminal was
+        # restarting, and were then skipped forever.
+        counts["fail"] += 1
+        return counts
     if not text:
-        marker.touch()
+        marker.touch()          # genuine empty: this symbol has no expirations
         return counts
     exps = []
     for line in text.splitlines()[1:]:
