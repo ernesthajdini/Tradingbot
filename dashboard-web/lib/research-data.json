@@ -1,7 +1,7 @@
 {
- "generated": "2026-09-22T14:20:18",
+ "generated": "2026-09-22T14:20:32",
  "totals": {
-  "configs_run": 374,
+  "configs_run": 398,
   "runs_logged": 609,
   "survivors": 0
  },
@@ -352,6 +352,33 @@
    },
    "control": null,
    "beat_control": null
+  },
+  {
+   "id": "16",
+   "title": "Mega-cap tier \u2014 is the toll the problem?",
+   "question": "Cut the round-trip toll below the prize. Does premium selling work then?",
+   "instrument": "short puts / put spreads",
+   "universe": "40 mega-caps vs $5-60 archive",
+   "n_configs": 24,
+   "promoted": 0,
+   "validated": 0,
+   "best_on_search_window": {
+    "label": "tier=MEGA structure=spread10 delta=0.2 exit=tp50",
+    "value": -24.096799999999998,
+    "unit": "$",
+    "n": 875,
+    "max_dd_pct": null,
+    "is_control": false
+   },
+   "control": {
+    "label": "tier=BASE structure=spread10 delta=0.2 exit=tp50",
+    "value": -39.91499999999998,
+    "unit": "$",
+    "n": 20,
+    "max_dd_pct": null,
+    "is_control": true
+   },
+   "beat_control": true
   },
   {
    "id": "11",

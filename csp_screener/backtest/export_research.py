@@ -69,6 +69,10 @@ AMENDMENTS = [
      "question": "Does the most popular retail premium strategy beat owning the stock?",
      "instrument": "wheel (puts + stock + calls)", "universe": "single names <= $12 / <= $50",
      "files": ["wheel_study.json"], "arm": "arm"},
+    {"id": "16", "title": "Mega-cap tier — is the toll the problem?",
+     "question": "Cut the round-trip toll below the prize. Does premium selling work then?",
+     "instrument": "short puts / put spreads", "universe": "40 mega-caps vs $5-60 archive",
+     "files": ["megacap_study.json"], "arm": "tier"},
     {"id": "11", "title": "Long volatility, IV-rank gated",
      "question": "Are options cheap when implied vol sits at its own low?",
      "instrument": "straddles / long options", "universe": "index ETFs",
@@ -119,7 +123,8 @@ def load_amendment(a):
                        "max_dd_pct": (round(100 * float(dd), 1)
                                       if dd is not None else None),
                        "is_control": bool(a["arm"] and
-                                          c.get(a["arm"]) in ("none", "control"))})
+                                          c.get(a["arm"]) in ("none", "control",
+                                                              "BASE"))})
     if not scored:
         return None
 
