@@ -1233,3 +1233,70 @@ risk, and against a matched control every time. 390 configurations.
 Affordability, recorded separately as declared: the naked put on this tier
 needs ~$13,500. Only the $5-wide spread at $500 is reachable at $1,200, and
 it is 42% of the account on one trade and loses $29-65 per trade.
+
+---
+
+# AMENDMENT 17 — the roll (declared 2026-09-22, BEFORE running)
+
+## Why this is not a variation on anything already dead
+
+The owner's live NVDA record (22 trades YTD, +EUR 2,138) contains a mechanic
+that NO amendment has tested. Every one of the 398 configurations exited at
+21 DTE, at expiry, or at a take-profit. None rolled.
+
+His two losing weeks were not absorbed — they were rolled:
+
+| week | realised loss | the roll placed in the same second | outcome |
+|---|---|---|---|
+| 21 Aug | -$469.54 (217.5P) | sold 28AUG 210P for $4.02 (3.8x prior week's credit) | +$1,498.46 |
+| 11 Sep | -$987.14 (222.5P) | sold 18SEP 220P for $4.22 (3.1x) | +$1,426.49 |
+
+Losses -$1,456.68; the rolls that followed returned +$2,924.95. **The roll is
+the engine of that record, and it is untested here.** Amendment 6 tried
+`on_stop="roll"` on index condors at 25-45 DTE — a different structure, tenor
+and universe — and nothing since.
+
+The mechanism is real and worth testing honestly: when the underlying drops,
+implied vol rises and the next week's lower strike pays a multiple of the
+original credit. That can genuinely fund the loss. It can also defer a loss
+into a larger position at a lower strike, which is how roll-based accounts
+fail. Which one dominates over 200+ cycles is an empirical question.
+
+## A. Declared space (12 configurations)
+
+Universe: NVDA weeklies from the mega-cap store, 2019-01-01..2023-12-29
+(52 weekly expiries/year confirmed present). Strike by the owner's own rule —
+ATM straddle expected move, strike at or below spot minus that move.
+
+| knob | values |
+|---|---|
+| challenged-position policy | **assign (take the loss, CONTROL)** ; roll unlimited ; roll at most 3 consecutive |
+| roll strike | at/below the NEW expected move ; one strike lower |
+| entry DTE | 3-10 (as traded) ; 5-12 |
+
+Fixed: 4 contracts to match the record, sell at bid / buy at ask, $1.00 per
+contract per side, earnings expirations rejected, positions spanning a split
+dropped (NVDA 4:1 on 2021-07-20 fabricated a -$48,839 artifact once already).
+
+**The unit of measurement is the SEQUENCE, not the trade.** A roll chain is
+one economic decision and must be scored end to end — exactly what the
+owner's own spec demanded ("cumulative P&L across the complete sequence").
+Scoring the legs separately is what makes a roll look like a winner.
+
+## B. Discipline
+
+TRAIN 2019-01-01..2021-12-31; VALIDATE 2022-01-01..2023-12-29 on promotion.
+Promotion needs n >= 100 sequences, positive mean at the PESSIMISTIC band,
+positive median, no sequence above 40% of total P&L, and beating the assign
+control on the same dates.
+
+## C. Stated in advance
+
+A roll that requires a net credit will almost always be available when vol
+spikes, so the roll arms will show a HIGHER win rate than the control by
+construction — that is not evidence. The question is the mean, and whether
+the worst sequence is worse than the worst single loss it replaced. The
+prior: rolling improves the median and worsens the tail, because it converts
+frequent small losses into rare large ones. If the mean survives 2022 — when
+NVDA fell ~50% — it is a real finding. A single ticker is still a single
+ticker and no result here promotes to production on its own.
