@@ -1300,3 +1300,83 @@ prior: rolling improves the median and worsens the tail, because it converts
 frequent small losses into rare large ones. If the mean survives 2022 — when
 NVDA fell ~50% — it is a real finding. A single ticker is still a single
 ticker and no result here promotes to production on its own.
+
+## Amendment 17A — the roll strike was mis-specified (declared 2026-09-22, BEFORE any result)
+
+The inert-knob guard fired: `assign` and `roll` returned identical n and mean,
+so the roll never executed once and the study could not test its own
+hypothesis. No result was read.
+
+**Cause — a modelling error, not a code bug.** 17 declared the roll target as
+"at/below the NEW expected move". That strike sits ~5% OTM and pays LESS than
+the cost of buying back a put that has just finished in the money, so the
+net-credit condition failed every time.
+
+That is not the traded mechanic. On 21 Aug the owner bought back the 217.5P
+for $2.23 and sold the 210P for $4.02 — a strike a few dollars lower, still
+close to the money, paying nearly twice the buyback. On 11 Sep: bought back at
+$3.81, sold the 220P at $4.22. The rule is **roll down and out to whatever
+strike still pays a NET CREDIT**, not to the expected-move strike.
+
+**Corrected space — the roll-strike knob becomes:**
+
+| value | rule |
+|---|---|
+| `min_strike` | the LOWEST next-week strike whose bid still exceeds the buyback (maximum protection that still funds the loss) |
+| `max_credit` | the HIGHEST such strike (maximum income, least protection) |
+
+Everything else is unchanged: same policies (assign CONTROL / roll / roll3),
+same DTE bands, same universe, splits, earnings gate, friction, and the same
+promotion rule. The count of declared configurations is unchanged. The entry
+rule still uses the expected move; only the ROLL target is corrected.
+
+The prediction stated in 17 stands and is not revised: rolling will raise the
+win rate by construction; the questions are the mean and whether the worst
+sequence exceeds the single loss it replaced.
+
+## VERDICT — Amendment 17 (2026-09-22). 8 of 10 promoted on TRAIN. 0 of 8 held. Total: 408.
+
+This is the result the whole pre-registration apparatus exists to produce.
+
+| window | policy | n | win | mean / SEQUENCE | worst |
+|---|---|---|---|---|---|
+| TRAIN 2019-21 | assign (control) | 143 | 88.1% | **+$104.27** | -$18,262 |
+| TRAIN 2019-21 | roll, max_credit | 134 | 92.5% | **+$142.84** | -$18,262 |
+| VALIDATE 2022-23 | assign (control) | ~54 | — | **-$355.36** | -$9,918 |
+| VALIDATE 2022-23 | roll, either strike | 54 | 83.3% | **-$474.54** | -$9,918 |
+
+**On the search window the roll looked like the answer.** Eight of ten
+configurations cleared every promotion bar — positive mean at the pessimistic
+band, positive median, no sequence over 40% of P&L, and beating the control.
+Reported from TRAIN alone this would have read "the roll works, +$143 a
+sequence, 92.5% win rate."
+
+**On validation all eight failed, and the roll was WORSE than not rolling:**
+-$474.54 against the assign control's -$355.36. Rolling cost an extra ~$119
+per sequence in the year NVDA fell ~50%.
+
+### The mechanism, which is the useful part
+
+The roll fired on 5% of TRAIN sequences and only **2%** of VALIDATE ones. A
+net-credit roll requires the next week's near strike to pay more than closing
+the loser costs — which is true after a SHARP, SHORT drop (vol spikes, the
+drop reverses) and false during a SUSTAINED decline. So the roll is available
+precisely when it is not needed and unavailable, or merely loss-deferring,
+when it is.
+
+Note the median stays POSITIVE in validation (+$473) while the mean is
+-$474.54: 83% of sequences still win. This is the same distribution found in
+Amendments 13, 16 and the live paper book — win often, lose rarely and
+enormously — and the roll does not change its shape. It raises the win rate
+by construction and moves money from the frequent small wins into the rare
+large loss.
+
+### Bearing on the owner's live record
+
+His two rolls (21 Aug, 11 Sep 2026) both worked because NVDA recovered within
+the week — the exact conditions under which this study says the roll
+succeeds. 22 trades in a rising period is 22 trades in a rising period. The
+study covers 197 sequences including a year that fell 50%.
+
+Amendment 17A's correction was load-bearing: the first specification made the
+roll impossible and the inert-knob guard caught it before any number was read.
