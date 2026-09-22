@@ -1,7 +1,7 @@
 {
- "generated": "2026-09-02T12:31:49",
+ "generated": "2026-09-22T14:20:18",
  "totals": {
-  "configs_run": 366,
+  "configs_run": 374,
   "runs_logged": 609,
   "survivors": 0
  },
@@ -332,6 +332,26 @@
     "is_control": true
    },
    "beat_control": false
+  },
+  {
+   "id": "15",
+   "title": "The wheel \u2014 CSP, assignment, covered calls",
+   "question": "Does the most popular retail premium strategy beat owning the stock?",
+   "instrument": "wheel (puts + stock + calls)",
+   "universe": "single names <= $12 / <= $50",
+   "n_configs": 8,
+   "promoted": 0,
+   "validated": 0,
+   "best_on_search_window": {
+    "label": "arm=wheel cap=50.0 put_exit=expiry call_rule=above_basis control_note=buy_hold_mean is the matched control",
+    "value": 83.12493702770783,
+    "unit": "$",
+    "n": 397,
+    "max_dd_pct": null,
+    "is_control": false
+   },
+   "control": null,
+   "beat_control": null
   },
   {
    "id": "11",

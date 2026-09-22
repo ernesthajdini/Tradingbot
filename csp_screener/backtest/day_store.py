@@ -116,16 +116,32 @@ def put_delta(S, K, T, sigma):
 # Build
 # ---------------------------------------------------------------------------
 
+def verify(store: Path) -> dict:
+    """Read EVERY partition back. write_dataset reports success even when it
+    has produced unreadable files: the 40-ticker mega store built '15,643,939
+    rows' and 265 of its 1,258 partitions could not be opened. A build is not
+    done until it has been read."""
+    parts = sorted(x for x in Path(store).iterdir() if x.is_dir())
+    bad = []
+    for x in parts:
+        try:
+            pads.dataset(x, format="parquet").to_table()
+        except Exception as e:
+            bad.append((x.name, str(e)[:80]))
+    return {"partitions": len(parts), "corrupt": len(bad), "bad": bad[:20]}
+
+
 def build(data_root: Path = DATA, store: Path = STORE,
-          options_subdir: str = "options") -> dict:
+          options_subdir: str = "options",
+          batch_tickers: int = BATCH_TICKERS) -> dict:
     opt_root = data_root / options_subdir
     tickers = sorted(p.name for p in opt_root.iterdir() if p.is_dir())
     store.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     stats = {"tickers": 0, "rows": 0, "batches": 0}
 
-    for start in range(0, len(tickers), BATCH_TICKERS):
-        batch = tickers[start:start + BATCH_TICKERS]
+    for start in range(0, len(tickers), batch_tickers):
+        batch = tickers[start:start + batch_tickers]
         try:
             frame, _ = data_loader.load_thetadata_full(
                 data_root, tickers=batch, compute_iv=False,
@@ -167,7 +183,9 @@ def build(data_root: Path = DATA, store: Path = STORE,
             # One batch spans every date its tickers quote on — ~2,700
             # partitions, well past pyarrow's default cap of 1024.
             max_partitions=8192,
-            max_open_files=8192,
+            # 8192 kept ~1,258 partition handles open through a 15.6M-row
+            # write and produced 265 truncated files. Let pyarrow rotate.
+            max_open_files=256,
         )
         stats["tickers"] += len(batch)
         stats["rows"] += len(frame)
@@ -223,10 +241,19 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--options-subdir", default="options")
     ap.add_argument("--store", default=str(STORE))
+    ap.add_argument("--batch-tickers", type=int, default=BATCH_TICKERS)
     a = ap.parse_args()
     print(f"Building day store from {a.options_subdir}...")
-    s = build(DATA, Path(a.store), options_subdir=a.options_subdir)
-    ds = DayStore(Path(a.store))
+    s = build(DATA, Path(a.store), options_subdir=a.options_subdir,
+              batch_tickers=a.batch_tickers)
     print(f"DAY STORE BUILT: {s}")
+    v = verify(Path(a.store))
+    print(f"VERIFY: {v['partitions']} partitions, {v['corrupt']} corrupt")
+    if v["corrupt"]:
+        for n, e in v["bad"]:
+            print(f"  CORRUPT {n}: {e}")
+        raise SystemExit(f"STORE IS CORRUPT ({v['corrupt']} partitions) — "
+                         f"not usable; rebuild with a smaller --batch-tickers")
+    ds = DayStore(Path(a.store))
     print(f"{len(ds.dates)} trading days "
           f"({ds.dates[0]} -> {ds.dates[-1]})" if ds.dates else "EMPTY")

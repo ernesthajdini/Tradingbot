@@ -1172,3 +1172,64 @@ crossing fills, ~8.8%/yr on collateral, worst trade -$3,898, 13.2% assigned,
 catastrophic 2021. That was NVDA's 4:1 split on 2021-07-20 — a pre-split
 strike marked against a post-split spot. Any future single-name harness must
 drop positions spanning a split; the archive stores as-traded strikes.
+
+## VERDICT — Amendment 16 (2026-09-22). 0 of 24. Running total: 390.
+
+The hypothesis was CONFIRMED and it did not matter.
+
+**The toll fell exactly as predicted.** Matched configurations, same tenor,
+same gates, the only difference being the underlying tier:
+
+| tier | round-trip toll | median credit | median collateral |
+|---|---|---|---|
+| mega-cap (40 frozen names) | **6.7%** | $231 | $13,500 |
+| base archive ($5-60) | **18.9%** | $66 | $2,000 |
+
+A 2.8x reduction, and 6.7% sits BELOW the 3-5%/month variance risk premium
+for the first time in this project. Every structural argument I had made for
+fifteen amendments said this should work.
+
+**Every single cell still lost.** Mega-cap: -$24 to -$157 per trade, all
+twelve, bootstrap CIs excluding zero on eleven of them. The naked-put arms
+lost MORE in absolute dollars than the base tier (-$107 to -$157 vs -$104 to
+-$139) because the positions are larger. 0 of 24 runs met the bar; the
+validation window stayed shut.
+
+### I was wrong about the mechanism, and this is the correction
+
+Since Amendment 11 the stated explanation has been "the toll is 3-4x the
+prize". That explanation is now falsified by its own test: the toll was cut
+below the prize and nothing improved. Decomposing the least-bad mega cell
+(spread10, 0.20 delta, 50% take-profit, 2019-2023, n=1,519):
+
+```
+win rate                90%
+mean per trade      -$30.60
+gross wins          $60,816
+gross losses      -$107,301
+worst 1% (15 trades) -$22,669   <- 49% of the NET loss, from 1% of trades
+worst 5% (75 trades) -$86,841   <- 81% of all losses
+```
+
+**It was never the toll. It is the tail, and the tail does not shrink when
+the spread does.** Fifteen trades out of fifteen hundred carry the result.
+This is the same shape Amendment 13 measured on the expensive tier (69% wins,
+worst 5% = 48% of losses) and the same shape the owner's live Learning page
+shows on 24 trades (BB alone erasing thirteen winners). Three independent
+samples, three tiers of liquidity, one distribution.
+
+Amendment 13 showed the tail is not removable by an entry rule. Amendment 16
+shows it is not removable by paying less. What remains of the premium-selling
+case is that the variance risk premium is real and roughly the size of the
+tail it compensates for — which is what a risk premium IS.
+
+### What this closes
+
+Premium selling is closed on every axis this project can test: both
+directions (buy and sell), both tiers (mega-cap and small), every tenor
+(0-3d through 90d), with and without an earnings gate, defined and undefined
+risk, and against a matched control every time. 390 configurations.
+
+Affordability, recorded separately as declared: the naked put on this tier
+needs ~$13,500. Only the $5-wide spread at $500 is reachable at $1,200, and
+it is 42% of the account on one trade and loses $29-65 per trade.
