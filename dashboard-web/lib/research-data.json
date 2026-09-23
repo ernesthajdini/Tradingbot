@@ -1,7 +1,7 @@
 {
- "generated": "2026-09-22T18:37:35",
+ "generated": "2026-09-23T10:25:54",
  "totals": {
-  "configs_run": 398,
+  "configs_run": 408,
   "runs_logged": 609,
   "survivors": 0
  },
@@ -375,6 +375,33 @@
     "value": -39.91499999999998,
     "unit": "$",
     "n": 20,
+    "max_dd_pct": null,
+    "is_control": true
+   },
+   "beat_control": true
+  },
+  {
+   "id": "17",
+   "title": "The roll \u2014 rescue or deferral?",
+   "question": "When a short put goes against you, does rolling for a credit beat taking the loss?",
+   "instrument": "NVDA weekly short puts",
+   "universe": "NVDA weeklies 2019-2023",
+   "n_configs": 10,
+   "promoted": 8,
+   "validated": 0,
+   "best_on_search_window": {
+    "label": "policy=roll roll_strike=max_credit dte=3-10",
+    "value": 142.84477611940295,
+    "unit": "$",
+    "n": 134,
+    "max_dd_pct": null,
+    "is_control": false
+   },
+   "control": {
+    "label": "policy=assign roll_strike=min_strike dte=3-10",
+    "value": 104.26853146853144,
+    "unit": "$",
+    "n": 143,
     "max_dd_pct": null,
     "is_control": true
    },

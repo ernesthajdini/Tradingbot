@@ -73,6 +73,10 @@ AMENDMENTS = [
      "question": "Cut the round-trip toll below the prize. Does premium selling work then?",
      "instrument": "short puts / put spreads", "universe": "40 mega-caps vs $5-60 archive",
      "files": ["megacap_study.json"], "arm": "tier"},
+    {"id": "17", "title": "The roll — rescue or deferral?",
+     "question": "When a short put goes against you, does rolling for a credit beat taking the loss?",
+     "instrument": "NVDA weekly short puts", "universe": "NVDA weeklies 2019-2023",
+     "files": ["roll_study.json"], "arm": "policy"},
     {"id": "11", "title": "Long volatility, IV-rank gated",
      "question": "Are options cheap when implied vol sits at its own low?",
      "instrument": "straddles / long options", "universe": "index ETFs",
@@ -124,7 +128,7 @@ def load_amendment(a):
                                       if dd is not None else None),
                        "is_control": bool(a["arm"] and
                                           c.get(a["arm"]) in ("none", "control",
-                                                              "BASE"))})
+                                                              "BASE", "assign"))})
     if not scored:
         return None
 
