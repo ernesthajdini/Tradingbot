@@ -178,8 +178,31 @@ def select_strike(puts, downside_ref):
 
 def evaluate(ticker: str, cash: float, reserve: float = 0.0,
              dte_min=DTE_MIN, dte_max=DTE_MAX,
-             allow_earnings: bool = False) -> Decision:
+             allow_earnings: bool = False,
+             check_book: bool = True) -> Decision:
     available = cash - reserve
+
+    # The book is the source of truth for what is already held. Without this
+    # the signal happily re-opens a name it is already short, and churns a
+    # ticker open/close/open, paying friction on every lap.
+    if check_book:
+        try:
+            from csp_screener import book
+            if book.has_open(ticker):
+                s = next(x for x in book.open_sequences().values()
+                         if x.ticker == ticker)
+                c = s.current
+                return Decision(ticker, "REJECT",
+                                f"already short {s.contracts}x ${c.strike:g} "
+                                f"exp {c.expiration} (sequence {s.seq}); "
+                                f"use roll_check to manage it")
+            since = book.in_cooldown(ticker)
+            if since:
+                return Decision(ticker, "WAIT",
+                                f"closed {ticker} on {since} — inside the "
+                                f"{book.REOPEN_COOLDOWN_DAYS}-day reopen cooldown")
+        except Exception as e:                      # book must never block a read
+            logger.warning(f"position book unavailable ({e}); proceeding")
     spot, chains = fetch_weekly_chain(ticker, dte_min, dte_max)
     if not spot:
         return Decision(ticker, "REJECT", "no live price for the underlying")
@@ -343,12 +366,14 @@ def main(argv=None) -> int:
     ap.add_argument("--dte-max", type=int, default=DTE_MAX)
     ap.add_argument("--allow-earnings", action="store_true",
                     help="override the default earnings rejection")
+    ap.add_argument("--ignore-book", action="store_true",
+                    help="skip the open-position and cooldown checks")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.WARNING,
                         format="%(levelname)s %(name)s: %(message)s")
     d = evaluate(a.ticker.upper(), a.cash, a.reserve, a.dte_min, a.dte_max,
-                 a.allow_earnings)
+                 a.allow_earnings, check_book=not a.ignore_book)
     print(json.dumps(asdict(d), indent=1, default=str) if a.json
           else format_decision(d))
     return 0 if d.verdict == "EXECUTE" else 1

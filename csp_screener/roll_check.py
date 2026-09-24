@@ -256,10 +256,13 @@ def format_report(r) -> str:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description="Price the four choices for a challenged short put")
-    ap.add_argument("--ticker", required=True)
-    ap.add_argument("--strike", type=float, required=True)
-    ap.add_argument("--expiry", required=True, help="YYYY-MM-DD of the open put")
-    ap.add_argument("--credit", type=float, required=True,
+    ap.add_argument("--seq", help="sequence id from the book; fills in "
+                                  "ticker, strike, expiry, credit, contracts "
+                                  "and prior P&L automatically")
+    ap.add_argument("--ticker")
+    ap.add_argument("--strike", type=float)
+    ap.add_argument("--expiry", help="YYYY-MM-DD of the open put")
+    ap.add_argument("--credit", type=float,
                     help="credit per share originally received")
     ap.add_argument("--contracts", type=int, default=1)
     ap.add_argument("--prior-pnl", type=float, default=0.0,
@@ -272,13 +275,33 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.WARNING,
                         format="%(levelname)s %(name)s: %(message)s")
-    try:
-        exp = datetime.strptime(a.expiry, "%Y-%m-%d").date()
-    except ValueError:
-        print(f"--expiry must be YYYY-MM-DD, got {a.expiry!r}")
+    ticker, strike, expiry, credit = a.ticker, a.strike, a.expiry, a.credit
+    contracts, prior = a.contracts, a.prior_pnl
+    if a.seq:
+        from csp_screener import book
+        s = book.replay().get(a.seq)
+        if not s or s.status != "open" or not s.current:
+            print(f"no open sequence {a.seq!r} in the book")
+            return 2
+        cur = s.current
+        ticker, strike, expiry = s.ticker, cur.strike, cur.expiration
+        credit, contracts, prior = cur.credit, s.contracts, s.realised
+        print(f"[book] {a.seq}: {contracts}x ${strike:g} exp {expiry}, "
+              f"credit ${credit:.2f}, ${prior:,.2f} already realised "
+              f"over {s.rolls} roll(s)\n")
+    missing = [n for n, v in (("--ticker", ticker), ("--strike", strike),
+                              ("--expiry", expiry), ("--credit", credit))
+               if v is None]
+    if missing:
+        print(f"need {', '.join(missing)} (or --seq to read them from the book)")
         return 2
-    r = evaluate_roll(a.ticker.upper(), a.strike, exp, a.credit, a.contracts,
-                      a.prior_pnl, a.buyback, a.cash)
+    try:
+        exp = datetime.strptime(expiry, "%Y-%m-%d").date()
+    except ValueError:
+        print(f"--expiry must be YYYY-MM-DD, got {expiry!r}")
+        return 2
+    r = evaluate_roll(ticker.upper(), strike, exp, credit, contracts,
+                      prior, a.buyback, a.cash)
     print(json.dumps(r, indent=1, default=str) if a.json else format_report(r))
     return 1 if r.get("error") else 0
 

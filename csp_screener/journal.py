@@ -45,6 +45,12 @@ JOURNAL_FILES = {
     # Separate topic on purpose — the go-live gate and the evaluator only
     # read virtual_trades, so broker fills can never alter the record.
     "paper_orders": config.JOURNAL_DIR / "paper_orders.jsonl",
+    # weekly_book: the owner's OWN live weekly-CSP positions, entered by
+    # hand. Separate topic on purpose — the go-live gate and the
+    # evaluator read virtual_trades only, so a real trade recorded here
+    # can never be mistaken for paper evidence, and paper trades can
+    # never be mistaken for his real book.
+    "weekly_book": config.JOURNAL_DIR / "weekly_book.jsonl",
 }
 
 
