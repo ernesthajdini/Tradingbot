@@ -32,8 +32,8 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from csp_screener import config
-from csp_screener.options_data import (OptionContract, _filter_zombie_puts,
-                                       _num)
+from csp_screener.options_data import (OptionContract, _estimate_put_delta,
+                                       _filter_zombie_puts, _num)
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +83,7 @@ class Decision:
     remaining_cash: Optional[float] = None
     earnings_before_expiry: Optional[str] = None
     macro_event_before_expiry: str = "NOT CHECKED — verify manually"
+    iv: Optional[float] = None
     checks: list = field(default_factory=list)
     quote_age: Optional[str] = None
 
@@ -91,7 +92,7 @@ class Decision:
 # Chain fetch — puts AND calls, at the weekly tenor
 # ---------------------------------------------------------------------------
 
-def _parse_side(ticker, exp, df, right):
+def _parse_side(ticker, exp, df, right, spot=None):
     out = []
     for _, row in df.iterrows():
         bid, ask = _num(row.get("bid")), _num(row.get("ask"))
@@ -101,12 +102,20 @@ def _parse_side(ticker, exp, df, right):
             ltd = ltd.to_pydatetime() if hasattr(ltd, "to_pydatetime") else None
         except Exception:
             ltd = None
+        strike = _num(row.get("strike"))
+        iv = _num(row.get("impliedVolatility")) or None
+        # yfinance ships no greeks. The spec REQUIRES delta on every signal,
+        # so estimate it from the quoted IV with the same Black-Scholes
+        # helper production uses. Puts only — the call side is needed for
+        # the straddle price, not for a delta.
+        delta = (_estimate_put_delta(spot, strike, exp, iv)
+                 if (right == "P" and spot) else None)
         out.append(OptionContract(
-            ticker=ticker, expiration=exp, strike=_num(row.get("strike")),
+            ticker=ticker, expiration=exp, strike=strike,
             right=right, bid=bid, ask=ask, last=_num(row.get("lastPrice")),
             mid=mid, open_interest=int(_num(row.get("openInterest"))),
             volume=int(_num(row.get("volume"))),
-            iv=(_num(row.get("impliedVolatility")) or None), delta=None,
+            iv=iv, delta=delta,
             source="yfinance", last_trade_date=ltd,
             contract_symbol=row.get("contractSymbol")))
     return out
@@ -139,11 +148,12 @@ def fetch_weekly_chain(ticker: str, dte_min=DTE_MIN, dte_max=DTE_MAX):
         except Exception as e:
             logger.debug(f"chain fetch failed {ticker} {s}: {e}")
             continue
-        puts, dropped = _filter_zombie_puts(_parse_side(ticker, exp, oc.puts, "P"))
+        puts, dropped = _filter_zombie_puts(
+            _parse_side(ticker, exp, oc.puts, "P", spot))
         for r in dropped:
             logger.info(f"zombie-row filter: {r}")
         out[exp] = {"puts": puts,
-                    "calls": _parse_side(ticker, exp, oc.calls, "C")}
+                    "calls": _parse_side(ticker, exp, oc.calls, "C", spot)}
     return spot, out
 
 
@@ -265,6 +275,7 @@ def evaluate(ticker: str, cash: float, reserve: float = 0.0,
                     if pick.bid > 0 and pick.ask > 0 else None)
     d.open_interest = pick.open_interest
     d.delta = round(pick.delta, 3) if pick.delta is not None else None
+    d.iv = round(pick.iv, 4) if pick.iv else None
     d.proposed_limit = limit
     d.premium_received = round(premium, 2)
     d.cash_if_assigned = round(exposure, 2)
@@ -324,7 +335,9 @@ def format_decision(d: Decision) -> str:
         ("", ""),
         ("Selected put strike", _f(d.strike, "$")),
         ("Strike % below stock", _f(d.strike_pct_below, "", "%")),
-        ("Put delta", d.delta if d.delta is not None else "not supplied by feed"),
+        ("Put delta", (f"{d.delta:.3f}   (Black-Scholes from quoted IV)"
+                       if d.delta is not None else "UNAVAILABLE — no IV quoted")),
+        ("Implied volatility", _f(100 * d.iv, "", "%", 1) if d.iv else "n/a"),
         ("Put bid / ask", f"{_f(d.bid,'$')} / {_f(d.ask,'$')}"
                           f"   (spread {_f(d.spread_pct,'','%',1)})"),
         ("Open interest", d.open_interest),
