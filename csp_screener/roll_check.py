@@ -99,7 +99,10 @@ def roll_candidates(chains, spot, buyback, current_expiry, limit=MAX_ROLL_CANDID
 
 def evaluate_roll(ticker, strike, expiry, credit, contracts=1, prior_pnl=0.0,
                   buyback_override=None, cash=None):
-    spot, chains = fetch_weekly_chain(ticker, dte_min=0, dte_max=45)
+    # Roll targets on the Friday cadence the study tested; the held expiry is
+    # always kept so a position on a Monday/Wednesday expiry can still be priced.
+    spot, chains = fetch_weekly_chain(ticker, dte_min=0, dte_max=45,
+                                      keep=(expiry,))
     out = {"ticker": ticker, "spot": spot, "strike": strike,
            "expiry": expiry.isoformat(), "credit": credit,
            "contracts": contracts, "prior_pnl": round(prior_pnl, 2),

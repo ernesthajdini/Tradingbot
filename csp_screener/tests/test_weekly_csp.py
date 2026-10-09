@@ -174,3 +174,22 @@ def test_no_order_placement_code_exists():
     src = inspect.getsource(w)
     for forbidden in ("placeOrder", "place_order", "MarketOrder", "LimitOrder"):
         assert forbidden not in src
+
+
+# ---------------------------------------------------------------------------
+# cadence — NVDA lists Mon/Wed expiries since 2025; the tested trade is Friday
+# ---------------------------------------------------------------------------
+
+def test_friday_is_weekly_monday_and_wednesday_are_not():
+    fri, mon, wed = datetime(2026, 10, 16), datetime(2026, 10, 12), datetime(2026, 10, 14)
+    listed = {fri, mon, wed}
+    assert w.is_weekly(fri, listed)
+    assert not w.is_weekly(mon, listed)
+    assert not w.is_weekly(wed, listed)
+
+
+def test_thursday_counts_only_when_friday_is_a_holiday():
+    # Good Friday 2027-03-26: the weekly moves to Thursday 25 Mar
+    thu = datetime(2027, 3, 25)
+    assert w.is_weekly(thu, {thu})
+    assert not w.is_weekly(thu, {thu, datetime(2027, 3, 26)})

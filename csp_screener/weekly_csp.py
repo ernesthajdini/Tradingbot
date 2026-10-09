@@ -121,8 +121,23 @@ def _parse_side(ticker, exp, df, right, spot=None):
     return out
 
 
-def fetch_weekly_chain(ticker: str, dte_min=DTE_MIN, dte_max=DTE_MAX):
-    """(spot, {expiration: {'puts': [...], 'calls': [...]}}) from live quotes."""
+def is_weekly(exp, listed) -> bool:
+    """The standard Friday weekly, or the Thursday it moves to when Friday is
+    a market holiday. Every NVDA trade in the 2019-2023 backtest and in the
+    owner's own record is on this cadence. Since 2025 NVDA also lists Monday
+    and Wednesday expiries; without this filter 'nearest expiry 3-10 days
+    out' picks a 3-day Monday on a Friday — a different, untested trade."""
+    if exp.weekday() == 4:
+        return True
+    return exp.weekday() == 3 and (exp + timedelta(days=1)) not in listed
+
+
+def fetch_weekly_chain(ticker: str, dte_min=DTE_MIN, dte_max=DTE_MAX,
+                       weekly_only: bool = True, keep=()):
+    """(spot, {expiration: {'puts': [...], 'calls': [...]}}) from live quotes.
+
+    keep: dates always included regardless of cadence — the expiry of a
+    position already held, which may not be a Friday."""
     import yfinance as yf
     t = yf.Ticker(ticker)
     try:
@@ -134,15 +149,21 @@ def fetch_weekly_chain(ticker: str, dte_min=DTE_MIN, dte_max=DTE_MAX):
         spot = float(hist["Close"].iloc[-1])
 
     today = datetime.now().date()
-    out = {}
+    listed = set()
     for s in (t.options or []):
         try:
-            exp = datetime.strptime(s, "%Y-%m-%d")
+            listed.add(datetime.strptime(s, "%Y-%m-%d"))
         except ValueError:
             continue
+    out = {}
+    for exp in sorted(listed):
         dte = (exp.date() - today).days
         if not (dte_min <= dte <= dte_max):
             continue
+        if (weekly_only and not is_weekly(exp, listed)
+                and exp.date() not in keep):
+            continue
+        s = exp.strftime("%Y-%m-%d")
         try:
             oc = t.option_chain(s)
         except Exception as e:
