@@ -23,6 +23,11 @@ on:
         type: choice
         options: [report, run]
         default: report
+      email:
+        description: "send the report email (no = plumbing check only)"
+        type: choice
+        options: ["yes", "no"]
+        default: "yes"
 
 permissions:
   contents: write          # commit state to forward-test-state
@@ -75,12 +80,31 @@ jobs:
               "Written by .github/workflows/forward-test.yml. Append-only." \
               "Open REPORT.md for the latest scoreboard." > state/README.md
           fi
+          # Vercel builds a preview for every pushed branch with Root Directory
+          # "dashboard-web". This branch holds no app, so every state commit
+          # was a failed preview. Vercel reads <RootDirectory>/vercel.json from
+          # the PUSHED commit, so give it one that disables this branch:
+          #  - deploymentEnabled keyed to this branch: no deployment is created;
+          #    a stray copy on main could never switch production off
+          #  - ignoreCommand: fallback if that is ever not honoured — exits 0
+          #    (skip, shown green) on this branch only, 1 (build) anywhere else
+          # Rewritten every run so the branch cannot drift back.
+          mkdir -p state/dashboard-web
+          cat > state/dashboard-web/vercel.json <<'EOF'
+          {
+            "$schema": "https://openapi.vercel.sh/vercel.json",
+            "git": { "deploymentEnabled": { "forward-test-state": false } },
+            "ignoreCommand": "[ \"$VERCEL_GIT_COMMIT_REF\" = \"forward-test-state\" ]"
+          }
+          EOF
+          python -c "import json; json.load(open('state/dashboard-web/vercel.json'))"
 
       - name: Run forward test
         id: run
         run: |
           MODE="${{ github.event.inputs.mode || 'run' }}"
-          ARGS="--state-dir state --email"
+          ARGS="--state-dir state"
+          if [ "${{ github.event.inputs.email || 'yes' }}" = "yes" ]; then ARGS="$ARGS --email"; fi
           if [ "$MODE" = "report" ]; then ARGS="$ARGS --report-only"; fi
           set +e
           python -m csp_screener.forward_test $ARGS
