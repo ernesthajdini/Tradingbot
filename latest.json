@@ -1,0 +1,48 @@
+{
+  "subject": "Forward test 09 Oct: rules say \u2014 | take-loss $+0 | roll $+0 | can trade: NOT YET",
+  "date": null,
+  "status": {
+    "take_loss": {
+      "status": "NOT YET",
+      "why": [
+        "0/26 sequences",
+        "0/26 weeks",
+        "no >=10% NVDA week yet (worst so far n/a)"
+      ]
+    },
+    "roll": {
+      "status": "NOT YET",
+      "why": [
+        "0/26 sequences",
+        "0/26 weeks",
+        "no >=10% NVDA week yet (worst so far n/a)"
+      ]
+    }
+  },
+  "scoreboard": {
+    "take_loss": {
+      "n": 0,
+      "total": 0,
+      "mean": null,
+      "median": null,
+      "win_rate": null,
+      "worst": null,
+      "best": null,
+      "top_share": null,
+      "rolled": 0,
+      "adjusted": 0
+    },
+    "roll": {
+      "n": 0,
+      "total": 0,
+      "mean": null,
+      "median": null,
+      "win_rate": null,
+      "worst": null,
+      "best": null,
+      "top_share": null,
+      "rolled": 0,
+      "adjusted": 0
+    }
+  }
+}
