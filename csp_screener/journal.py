@@ -51,6 +51,12 @@ JOURNAL_FILES = {
     # can never be mistaken for paper evidence, and paper trades can
     # never be mistaken for his real book.
     "weekly_book": config.JOURNAL_DIR / "weekly_book.jsonl",
+    # fwd_*: Amendment 18's forward test of the owner's weekly rules, on
+    # paper. Own topics so nothing else (gate, evaluator, his real book) can
+    # read them, and no Supabase table, so they never leave the state branch.
+    "fwd_take_loss": config.JOURNAL_DIR / "fwd_take_loss.jsonl",
+    "fwd_roll": config.JOURNAL_DIR / "fwd_roll.jsonl",
+    "fwd_runs": config.JOURNAL_DIR / "fwd_runs.jsonl",
 }
 
 

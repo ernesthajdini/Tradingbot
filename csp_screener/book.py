@@ -116,10 +116,10 @@ class Sequence:
         return round(c.strike * self.contracts * MULT, 2) if c else 0.0
 
 
-def replay() -> dict:
+def replay(topic: str = TOPIC) -> dict:
     """{seq_id: Sequence} from the append-only log."""
     seqs: dict = {}
-    for ev in journal.read_all(TOPIC):
+    for ev in journal.read_all(topic):
         sid, kind = ev.get("seq"), ev.get("event")
         if not sid or not kind:
             continue
@@ -147,21 +147,23 @@ def replay() -> dict:
     return seqs
 
 
-def open_sequences() -> dict:
-    return {k: v for k, v in replay().items() if v.status == "open"}
+def open_sequences(topic: str = TOPIC) -> dict:
+    return {k: v for k, v in replay(topic).items() if v.status == "open"}
 
 
-def has_open(ticker: str) -> bool:
-    return any(s.ticker == ticker.upper() for s in open_sequences().values())
+def has_open(ticker: str, topic: str = TOPIC) -> bool:
+    return any(s.ticker == ticker.upper()
+               for s in open_sequences(topic).values())
 
 
-def in_cooldown(ticker: str, days: int = REOPEN_COOLDOWN_DAYS) -> Optional[str]:
+def in_cooldown(ticker: str, days: int = REOPEN_COOLDOWN_DAYS,
+                topic: str = TOPIC) -> Optional[str]:
     """Most recent close date for the ticker if it is still inside the
     reopen cooldown, else None. Stops the open/close/reopen churn that cost
     the paper book friction on every lap."""
     cutoff = datetime.now() - timedelta(days=days)
     latest = None
-    for s in replay().values():
+    for s in replay(topic).values():
         if s.ticker != ticker.upper() or s.status != "closed":
             continue
         ends = [l.closed_at for l in s.legs if l.closed_at]
@@ -177,26 +179,28 @@ def in_cooldown(ticker: str, days: int = REOPEN_COOLDOWN_DAYS) -> Optional[str]:
 # Writers — append only, never edit
 # ---------------------------------------------------------------------------
 
-def record_open(ticker, strike, expiration, credit, contracts, note=""):
+def record_open(ticker, strike, expiration, credit, contracts, note="",
+                topic: str = TOPIC):
     ticker = ticker.upper()
     sid = seq_id(ticker, expiration, strike)
-    if sid in replay():
+    if sid in replay(topic):
         raise ValueError(f"sequence {sid} already exists — roll or close it")
-    if has_open(ticker):
+    if has_open(ticker, topic):
         raise ValueError(f"{ticker} already has an open sequence; "
                          f"one per ticker")
-    return journal.append(TOPIC, {
+    return journal.append(topic, {
         "event": "open", "seq": sid, "ticker": ticker, "strike": float(strike),
         "expiration": expiration, "credit": float(credit),
         "contracts": int(contracts), "at": datetime.now().isoformat(),
         "note": note})
 
 
-def record_roll(sid, buyback, to_strike, to_expiration, credit, note=""):
-    s = replay().get(sid)
+def record_roll(sid, buyback, to_strike, to_expiration, credit, note="",
+                topic: str = TOPIC):
+    s = replay(topic).get(sid)
     if not s or s.status != "open" or not s.current:
         raise ValueError(f"no open sequence {sid}")
-    return journal.append(TOPIC, {
+    return journal.append(topic, {
         "event": "roll", "seq": sid, "ticker": s.ticker,
         "from_strike": s.current.strike, "from_expiration": s.current.expiration,
         "buyback": float(buyback), "to_strike": float(to_strike),
@@ -206,11 +210,11 @@ def record_roll(sid, buyback, to_strike, to_expiration, credit, note=""):
 
 
 def record_close(sid, buyback=0.0, expired_worthless=False, outcome="",
-                 note=""):
-    s = replay().get(sid)
+                 note="", topic: str = TOPIC):
+    s = replay(topic).get(sid)
     if not s or s.status != "open" or not s.current:
         raise ValueError(f"no open sequence {sid}")
-    return journal.append(TOPIC, {
+    return journal.append(topic, {
         "event": "close", "seq": sid, "ticker": s.ticker,
         "strike": s.current.strike, "expiration": s.current.expiration,
         "buyback": float(buyback), "expired_worthless": bool(expired_worthless),

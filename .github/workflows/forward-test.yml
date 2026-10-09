@@ -1,0 +1,103 @@
+# ============================================================================
+# FORWARD TEST (paper) — Amendment 18, csp_screener/backtest/MANIFEST.md
+#
+# Runs the owner's own weekly NVDA rules on live quotes once per trading day,
+# on paper, and emails the scoreboard against the bar fixed on 2026-10-09.
+# State (append-only journals + REPORT.md) lives on branch forward-test-state.
+# No broker is imported and no order is placed.
+# ============================================================================
+name: Forward test (paper) — Amendment 18
+
+on:
+  schedule:
+  # The decision window is 14:00-16:00 ET. These three UTC slots cover both
+  # EDT (18:30 + 19:30 land inside) and EST (19:30 + 20:30 land inside).
+  # The script acts on the first in-window run of the day; the rest no-op.
+  - cron: '30 18 * * 1-5'
+  - cron: '30 19 * * 1-5'
+  - cron: '30 20 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "report = scoreboard + email only; run = act if inside the window"
+        type: choice
+        options: [report, run]
+        default: report
+
+permissions:
+  contents: write          # commit state to forward-test-state
+
+concurrency:
+  group: forward-test
+  cancel-in-progress: false
+
+jobs:
+  forward-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      SMTP_TO: ${{ secrets.SMTP_TO }}
+      RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+      RESEND_TO: ${{ secrets.RESEND_TO }}
+      PYTHONIOENCODING: utf-8
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install yfinance pandas numpy requests
+
+      - name: Attach state branch
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin forward-test-state >/dev/null; then
+            git fetch --depth=50 origin forward-test-state
+            git worktree add --detach state FETCH_HEAD
+            git -C state checkout -q -B forward-test-state
+          else
+            git worktree add --detach state
+            git -C state checkout -q --orphan forward-test-state
+            git -C state rm -rfq .
+            printf '%s\n' "# Forward test state (paper)" "" \
+              "Written by .github/workflows/forward-test.yml. Append-only." \
+              "Open REPORT.md for the latest scoreboard." > state/README.md
+          fi
+
+      - name: Run forward test
+        id: run
+        run: |
+          MODE="${{ github.event.inputs.mode || 'run' }}"
+          ARGS="--state-dir state --email"
+          if [ "$MODE" = "report" ]; then ARGS="$ARGS --report-only"; fi
+          set +e
+          python -m csp_screener.forward_test $ARGS
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+
+      # Always commit: a failed email must not lose a trade already booked.
+      - name: Commit state
+        if: always()
+        run: |
+          cd state
+          git add -A
+          if git diff --cached --quiet; then echo "no state change"; exit 0; fi
+          git commit -qm "forward test $(date -u '+%F %H:%MZ')"
+          git push origin HEAD:forward-test-state
+
+      - name: Fail loudly if the run failed
+        if: steps.run.outputs.rc != '0'
+        run: |
+          echo "forward_test exited ${{ steps.run.outputs.rc }} (data outage or email failure)"
+          exit 1

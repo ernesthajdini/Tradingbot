@@ -1380,3 +1380,72 @@ study covers 197 sequences including a year that fell 50%.
 
 Amendment 17A's correction was load-bearing: the first specification made the
 roll impossible and the inert-knob guard caught it before any number was read.
+
+---
+
+## Amendment 18 — FORWARD TEST of the owner's weekly NVDA rules (declared 2026-10-09, BEFORE the first trade)
+
+Not a backtest. Nothing here has been seen: the data is the weeks that come
+next. This exists because the two kinds of evidence already in hand cannot
+answer the owner's question ("when can I trade it?"): 408 historical
+configurations say the edge is not established, and 22 live trades in a
+rising market cannot say it is.
+
+### A. Design (code: `csp_screener/forward_test.py`)
+
+- **Entry**: `weekly_csp.evaluate` exactly as the owner specified it —
+  expected-move strike (highest strike at or below spot − ATM straddle),
+  Friday weekly 3-10 DTE, earnings before expiry rejected, the five gates.
+  NVDA only, 1 contract, $30,000 paper cash.
+- **Cadence fix, made today and disclosed**: since 2025 NVDA lists Monday and
+  Wednesday expiries. Every expiry this programme ever backtested was a
+  Friday weekly (sampled 2019-2023: 49 Fri, 3 holiday-Thursday, 0 other), and
+  so is every one of the owner's trades. `weekly_csp` now keeps Friday
+  weeklies only (Thursday when Friday is a holiday). Before this fix the live
+  signal would have picked a 3-day Monday on a Friday.
+- **Two arms, one entry.** They differ only when the put is ITM at expiry:
+  `take_loss` buys it back (Amendment 17's control); `roll` rolls to the
+  LOWEST strike below spot, on the nearest Friday weekly 3-10 DTE not
+  spanning earnings, whose bid exceeds the buyback (17A `min_strike`; the
+  strike the owner chose on 21 Aug), else takes the loss.
+- **Managed only at expiry**; a new sequence opens the same day the last one
+  ends (as in Amendment 17; no reopen cooldown).
+- **Fills**: entries at the BID, buybacks at the ASK, $1/contract/side.
+  Intrinsic only when no two-sided quote exists (flagged).
+- **Timing**: one decision run per trading day, 14:00-16:00 ET (cron 18:30
+  UTC, backups 19:30 / 20:30 UTC; idempotent per day). A put let go as OTM at
+  the decision but which CLOSES in the money is re-scored as assigned
+  (`adjust` event, booked once, from the official close). A missed expiry is
+  settled on that day's close, with no roll.
+- **Unit**: the sequence (entry + every roll + final close), as in 17.
+- **Isolation**: topics `fwd_take_loss`, `fwd_roll`, `fwd_runs`; no Supabase
+  table; state committed to branch `forward-test-state`. Nothing else reads
+  them. No broker code (test-enforced).
+
+### B. The bar — an arm CLEARS only when ALL of these hold
+
+1. at least **26 closed sequences**, AND
+2. at least **26 calendar weeks** since 2026-10-09, AND
+3. the window contains a **≥10% five-trading-day NVDA fall** (close to
+   close) — a record that never met a bad week says nothing about the tail,
+   which is where Amendments 13, 16 and 17 found every loss lives; THEN
+4. **mean sequence P&L > 0** at the fills above, AND
+5. **median > 0**, AND
+6. no single sequence > **40%** of total P&L, AND
+7. for `roll` only: total P&L **beats `take_loss`**.
+
+Before 1-3 hold the P&L is shown daily but is **not readable** — status
+"NOT YET". **Kill rule**: either arm's closed P&L ≤ **−$3,000** (10% of the
+paper account) → that arm FAILS immediately.
+
+### C. Stated in advance
+
+- Expected, from Amendment 17's validation years: frequent small wins and a
+  rare large loss; the most likely failure mode is condition 4 failing after
+  condition 3 is met.
+- CLEARED means the evidence no longer contradicts the rules; it is not a
+  forecast and not advice. FAILED is final for that arm under these rules;
+  a changed rule is a new amendment with a new start date.
+- No parameter in section A or B changes after today. Any code fix that
+  alters a decision is logged here with its date, and the record before it
+  is reported separately.
