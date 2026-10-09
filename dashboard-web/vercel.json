@@ -1,0 +1,5 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "git": { "deploymentEnabled": { "forward-test-state": false } },
+  "ignoreCommand": "[ \"$VERCEL_GIT_COMMIT_REF\" = \"forward-test-state\" ]"
+}
